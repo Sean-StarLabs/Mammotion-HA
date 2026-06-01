@@ -427,6 +427,9 @@
       "rain_detection": {
         "name": "Rain detection (mower) On/Off"
       },
+      "auto_lighting": {
+        "name": "Auto lighting"
+      },
       "side_led": {
         "name": "Side LED on/off"
       },
@@ -504,6 +507,8 @@
       "bypass_mode": {
         "name": "Obstacle detection",
         "state": {
+          "off": "Off",
+          "standard": "Standard",
           "direct_touch": "Off",
           "slow_touch": "Slow touch",
           "less_touch": "Less touch",
@@ -519,8 +524,32 @@
           "random_angle": "Random"
         }
       },
+      "pattern_family": {
+        "name": "Mowing pattern",
+        "state": {
+          "perimeter_only": "Perimeter only",
+          "stripes": "Stripes",
+          "grid": "Grid"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Stripes pattern",
+        "state": {
+          "efficient": "Efficient",
+          "random": "Random",
+          "custom": "Custom"
+        }
+      },
+      "grid_pattern": {
+        "name": "Grid pattern",
+        "state": {
+          "default": "Default",
+          "random": "Random",
+          "custom": "Custom"
+        }
+      },
       "traversal_mode": {
-        "name": "Traversal Mode",
+        "name": "Route to dock",
         "state": {
           "direct": "Direct",
           "follow_perimeter": "Follow the perimeter"
@@ -533,20 +562,32 @@
           "zero_turn": "Zero turn"
         }
       },
-      "wildlife_safety": {
-        "name": "Wildlife Safety",
-        "state": {
-          "off": "Off",
-          "stop_mowing": "Stop Mowing",
-          "low_speed_mowing": "Low-Speed Mowing"
-        }
-      },
       "cutter_mode": {
-        "name": "Cutter Speed",
+        "name": "Blade speed",
         "state": {
+          "low": "Low",
+          "high": "High",
           "normal": "Medium",
           "slow": "Slow",
           "fast": "Fast"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Voice volume",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
+      },
+      "wildlife_safety": {
+        "name": "Wildlife safety",
+        "state": {
+          "off": "Off",
+          "low_speed_mowing": "Low-speed mowing",
+          "stop_mowing": "Stop mowing"
         }
       },
       "voice_gender": {
@@ -607,6 +648,9 @@
       "path_spacing": {
         "name": "Path spacing"
       },
+      "pattern_angle": {
+        "name": "Pattern angle"
+      },
       "dumping_interval": {
         "name": "Dumping frequency"
       },
@@ -625,6 +669,11 @@
     },
     "device_tracker": {
       "name": "Device Tracking"
+    },
+    "image": {
+      "map": {
+        "name": "Map"
+      }
     }
   },
   "selector": {
