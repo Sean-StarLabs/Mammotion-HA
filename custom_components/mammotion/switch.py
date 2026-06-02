@@ -146,31 +146,11 @@ MINI_AND_X_SERIES_CONFIG_SWITCH_ENTITIES: tuple[
     ),
 )
 
-YUKA_SWITCH_ENTITIES: tuple[MammotionAsyncSwitchEntityDescription, ...] = (
-    MammotionAsyncSwitchEntityDescription(
-        key="rain_detection",
-        is_on_func=lambda coordinator: coordinator.data.mower_state.rain_detection,
-        set_fn=lambda coordinator, value: coordinator.async_set_rain_detection(value),
-        entity_category=EntityCategory.CONFIG,
-    ),
+YUKA_2_EXTRA_SWITCH_ENTITIES: tuple[MammotionAsyncSwitchEntityDescription, ...] = (
     MammotionAsyncSwitchEntityDescription(
         key="auto_lighting",
         is_on_func=lambda coordinator: coordinator.data.mower_state.lamp_info.night_light,
         set_fn=lambda coordinator, value: coordinator.async_set_night_light(value),
-        entity_category=EntityCategory.CONFIG,
-    ),
-    MammotionAsyncSwitchEntityDescription(
-        key="side_led",
-        is_on_func=lambda coordinator: bool(
-            coordinator.data.mower_state.side_led.operate
-        ),
-        set_fn=lambda coordinator, value: coordinator.async_set_sidelight(int(value)),
-        entity_category=EntityCategory.CONFIG,
-    ),
-    MammotionAsyncSwitchEntityDescription(
-        key="voice_on_off",
-        is_on_func=lambda coordinator: coordinator.data.mower_state.audio.volume > 0,
-        set_fn=lambda coordinator, value: coordinator.async_set_voice_on_off(value),
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -270,20 +250,22 @@ async def async_setup_entry(
         coordinator.subscribe_map_updated(update_areas)
 
         entities = []
-        if is_yuka_2(mower.device.device_name):
-            async_add_entities(
-                MammotionSwitchEntity(coordinator, entity_description)
-                for entity_description in YUKA_SWITCH_ENTITIES
-            )
-            continue
 
         for entity_description in SWITCH_ENTITIES:
             entity = MammotionSwitchEntity(coordinator, entity_description)
             entities.append(entity)
 
-        if DeviceType.is_luba_pro(mower.device.device_name):
+        if DeviceType.is_luba_pro(mower.device.device_name) or is_yuka_2(
+            mower.device.device_name
+        ):
             for entity_description in AUDIO_SWITCH_ENTITIES:
                 entities.append(MammotionSwitchEntity(coordinator, entity_description))
+
+        if is_yuka_2(mower.device.device_name):
+            for entity_description in YUKA_2_EXTRA_SWITCH_ENTITIES:
+                entities.append(MammotionSwitchEntity(coordinator, entity_description))
+            async_add_entities(entities)
+            continue
 
         for entity_description in CONFIG_SWITCH_ENTITIES:
             config_entity = MammotionConfigSwitchEntity(coordinator, entity_description)

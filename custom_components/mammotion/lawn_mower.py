@@ -14,7 +14,7 @@ from homeassistant.components.lawn_mower import (
     LawnMowerEntity,
     LawnMowerEntityFeature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -232,16 +232,33 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         return None
 
     async def _async_wait_for_modes(
-        self, modes: set[WorkMode], attempts: int = 15
+        self, modes: set[WorkMode], timeout: float = 10.0
     ) -> bool:
-        """Wait for the mower to report one of the expected work modes."""
-        for _ in range(attempts):
-            await self.coordinator.async_request_report_snapshot()
+        """Wait for the report stream to show one of the expected work modes."""
+        if self.rpt_dev_status.sys_status in modes:
+            return True
+
+        mode_seen = asyncio.Event()
+
+        @callback
+        def _wake_on_mode() -> None:
+            if self.rpt_dev_status.sys_status in modes:
+                mode_seen.set()
+
+        remove_listener = self.coordinator.async_add_listener(_wake_on_mode)
+        try:
+            await self.coordinator.async_start_report_stream(
+                duration_ms=int(timeout * 1000)
+            )
             if self.rpt_dev_status.sys_status in modes:
                 return True
-            await asyncio.sleep(1)
-        await self.coordinator.async_request_report_snapshot()
-        return self.rpt_dev_status.sys_status in modes
+            await asyncio.wait_for(mode_seen.wait(), timeout)
+        except TimeoutError:
+            return self.rpt_dev_status.sys_status in modes
+        finally:
+            remove_listener()
+
+        return True
 
     async def _async_start_job_and_verify(self, trans_key: str) -> None:
         """Start the planned job and verify the mower actually begins work."""
