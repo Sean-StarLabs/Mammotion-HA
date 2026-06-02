@@ -14,9 +14,8 @@ from homeassistant.core import HomeAssistant, callback
 from pymammotion.utility.constant import WorkMode
 
 from . import MammotionConfigEntry
-from .coordinator import MammotionMapUpdateCoordinator, MammotionReportUpdateCoordinator
+from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
-from .geojson_utils import apply_geojson_offset
 from .map_renderer import placeholder_png, render_map_png
 
 
@@ -27,7 +26,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up map image entities."""
     async_add_entities(
-        MammotionMapImage(mower.map_coordinator, mower.reporting_coordinator, hass)
+        MammotionMapImage(mower.reporting_coordinator, hass)
         for mower in entry.runtime_data.mowers
     )
 
@@ -41,34 +40,30 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
 
     def __init__(
         self,
-        coordinator: MammotionMapUpdateCoordinator,
-        report_coordinator: MammotionReportUpdateCoordinator,
+        coordinator: MammotionReportUpdateCoordinator,
         hass: HomeAssistant,
     ) -> None:
         """Initialize the map image."""
         MammotionBaseEntity.__init__(self, coordinator, "map")
         ImageEntity.__init__(self, hass)
-        self._report_coordinator = report_coordinator
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         self._cached_png: bytes | None = None
         self._last_content_key: str | None = None
 
     async def async_added_to_hass(self) -> None:
-        """Refresh rendered image when live mower telemetry changes."""
+        """Refresh rendered image when the mower map changes."""
         await super().async_added_to_hass()
-        self.async_on_remove(
-            self._report_coordinator.async_add_listener(self._handle_report_update)
-        )
+        self.coordinator.subscribe_map_updated(self._handle_map_update)
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Invalidate image when map coordinator changes."""
+        """Invalidate image when live mower telemetry changes."""
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         super()._handle_coordinator_update()
 
     @callback
-    def _handle_report_update(self) -> None:
-        """Invalidate image when live mower position changes."""
+    def _handle_map_update(self) -> None:
+        """Invalidate image when static map data changes."""
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         self.async_write_ha_state()
 
@@ -80,10 +75,10 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         if mower is None:
             return placeholder_png()
 
-        geojson = self._offset_geojson(mower)
+        geojson = self._merged_geojson(mower)
         mower_location = self._offset_location(mower.location.device)
         mower_trail = (
-            list(getattr(self._report_coordinator, "location_trail", []))
+            list(getattr(self.coordinator, "location_trail", []))
             if self._is_live_report_active(mower)
             else []
         )
@@ -102,16 +97,6 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         self._last_content_key = content_key
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         return self._cached_png
-
-    def _offset_geojson(self, mower: Any) -> dict[str, Any] | None:
-        geojson = self._merged_geojson(mower)
-        if not geojson:
-            return None
-        return apply_geojson_offset(
-            geojson,
-            self._report_coordinator.map_offset_lat,
-            self._report_coordinator.map_offset_lon,
-        )
 
     @staticmethod
     def _merged_geojson(mower: Any) -> dict[str, Any] | None:
@@ -215,12 +200,10 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             longitude = float(longitude)
         except (TypeError, ValueError):
             return location
-        location.latitude = (
-            latitude + self._report_coordinator.map_offset_lat / 111_111.0
-        )
+        location.latitude = latitude + self.coordinator.map_offset_lat / 111_111.0
         cos_lat = math.cos(math.radians(location.latitude))
         if cos_lat != 0:
-            location.longitude = longitude + self._report_coordinator.map_offset_lon / (
+            location.longitude = longitude + self.coordinator.map_offset_lon / (
                 111_111.0 * cos_lat
             )
         return location
