@@ -162,6 +162,7 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "speed", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.speed,
     ),
     MammotionConfigNumberEntityDescription(
         key="path_spacing",
@@ -175,6 +176,7 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "channel_width", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.channel_width,
     ),
     MammotionConfigNumberEntityDescription(
         key="pattern_angle",
@@ -185,6 +187,7 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.toward,
         available_fn=lambda coordinator: coordinator.operation_settings.channel_mode
         in (STRIPES_PATTERN_VALUE, GRID_PATTERN_VALUE)
         and coordinator.operation_settings.toward_mode
