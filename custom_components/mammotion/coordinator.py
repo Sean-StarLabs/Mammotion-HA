@@ -1434,9 +1434,9 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         try:
             if restored_data is not None:
                 mower_state = MowingDevice().from_dict(restored_data)
+                self.data = mower_state
                 if handle is not None:
                     handle.restore_device(mower_state)
-                    self.data = mower_state
         except InvalidFieldValue:
             empty = MowingDevice()
             self.data = empty
