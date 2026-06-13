@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 from asyncio import CancelledError
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -36,6 +38,8 @@ from pymammotion.aliyun.exceptions import TooManyRequestsException
 from pymammotion.aliyun.model.dev_by_account_response import Device
 from pymammotion.client import MammotionClient
 from pymammotion.data.model.device import MowingDevice
+from pymammotion.device.state_reducer import MowerStateReducer
+from pymammotion.proto import LubaMsg
 from pymammotion.transport.base import (
     AccountInUseError,
     LoginFailedError,
@@ -107,6 +111,71 @@ type MammotionConfigEntry = ConfigEntry[MammotionDevices]
 
 _CLOUD_AUTH_BACKOFF = timedelta(hours=12)
 _CLOUD_AUTH_BACKOFF_UNTIL = "cloud_auth_backoff_until"
+_LUBA_SUB_MESSAGES = (
+    "net",
+    "sys",
+    "nav",
+    "driver",
+    "ota",
+    "mul",
+    "null",
+    "pept",
+    "base",
+    "pdt",
+    "ctrl",
+)
+_ORIGINAL_MOWER_STATE_REDUCER_APPLY = MowerStateReducer.apply
+
+
+def _luba_submessage_names(message: LubaMsg) -> list[str]:
+    return [
+        submessage
+        for submessage in _LUBA_SUB_MESSAGES
+        if getattr(message, submessage, None) is not None
+    ]
+
+
+def _luba_with_single_submessage(message: LubaMsg, submessage: str) -> LubaMsg:
+    replacements = dict.fromkeys(_LUBA_SUB_MESSAGES)
+    replacements[submessage] = getattr(message, submessage)
+    return dataclasses.replace(message, **replacements)
+
+
+def _apply_mower_state_update(
+    self: MowerStateReducer,
+    current: MowingDevice,
+    message: LubaMsg,
+) -> MowingDevice:
+    try:
+        return _ORIGINAL_MOWER_STATE_REDUCER_APPLY(self, current, message)
+    except RuntimeError as ex:
+        if "more than one field set in oneof" not in str(ex):
+            raise
+        submessages = _luba_submessage_names(message)
+        if len(submessages) < 2:
+            raise
+        LOGGER.debug(
+            "Mammotion combined mower state update contains multiple submessages: %s",
+            submessages,
+        )
+        updated = current
+        for submessage in submessages:
+            updated = _ORIGINAL_MOWER_STATE_REDUCER_APPLY(
+                self,
+                updated,
+                _luba_with_single_submessage(message, submessage),
+            )
+        return updated
+
+
+def _patch_mower_state_reducer() -> None:
+    if getattr(MowerStateReducer.apply, "__mammotion_ha_multi_oneof_patch__", False):
+        return
+    _apply_mower_state_update.__mammotion_ha_multi_oneof_patch__ = True  # type: ignore[attr-defined]
+    MowerStateReducer.apply = _apply_mower_state_update  # type: ignore[method-assign]
+
+
+_patch_mower_state_reducer()
 
 
 def _cloud_auth_backoff_until(data: Mapping[str, Any]) -> datetime | None:
@@ -409,6 +478,24 @@ async def _await_device_connection(
         raise HomeAssistantError("Setup cancelled, transport connection timed out")
 
 
+async def _async_setup_map_best_effort(
+    map_coordinator: MammotionMapUpdateCoordinator,
+) -> None:
+    async def _run_map_setup() -> None:
+        try:
+            async with asyncio.timeout(20):
+                await map_coordinator._async_setup()
+        except Exception as ex:
+            LOGGER.warning(
+                "Mammotion map setup failed for %s; continuing startup and retrying "
+                "map updates later: %s",
+                map_coordinator.device_name,
+                ex,
+            )
+
+    map_coordinator.hass.async_create_task(_run_map_setup())
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) -> bool:
     """Set up Mammotion from a config entry."""
 
@@ -590,7 +677,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
             await maintenance_coordinator.async_config_entry_first_refresh()
 
             await error_coordinator.async_config_entry_first_refresh()
-            await map_coordinator._async_setup()
+            await _async_setup_map_best_effort(map_coordinator)
 
             mammotion_mowers.append(
                 MammotionMowerData(
@@ -737,7 +824,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
                 await report_coordinator.async_refresh()
                 await maintenance_coordinator.async_refresh()
                 await error_coordinator.async_refresh()
-            await map_coordinator._async_setup()
+            await _async_setup_map_best_effort(map_coordinator)
 
             mammotion_mowers.append(
                 MammotionMowerData(
