@@ -77,6 +77,7 @@ from pymammotion.transport.base import (
     SagaFailedError,
     SessionExpiredError,
     Subscription,
+    TransportError,
     TransportType,
 )
 from pymammotion.transport.ble import BLETransport
@@ -476,14 +477,30 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         if device is None or not self.is_online():
             return None
 
-        try:
-            response = await self.manager.send_command_and_wait(
+        async def _send(prefer_ble: bool) -> Any:
+            return await self.manager.send_command_and_wait(
                 self.device_name,
                 command,
                 expected_field,
-                prefer_ble=self._bluetooth_enabled,
+                prefer_ble=prefer_ble,
                 **kwargs,
             )
+
+        try:
+            try:
+                response = await _send(self._bluetooth_enabled)
+            except CommandTimeoutError:
+                if not self._bluetooth_enabled:
+                    raise
+                LOGGER.warning(
+                    "Command %s for %s timed out over preferred BLE; retrying via MQTT",
+                    command,
+                    self.device_name,
+                )
+                if handle := self.manager.mower(self.device_name):
+                    with contextlib.suppress(TransportError):
+                        await handle.disconnect_transport(TransportType.BLE)
+                response = await _send(False)
             self.update_failures = 0
             return response
         except EXPIRED_CREDENTIAL_EXCEPTIONS as exc:
