@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import betterproto2
 import contextlib
 import dataclasses
 import datetime
