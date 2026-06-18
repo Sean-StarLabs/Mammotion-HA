@@ -232,10 +232,14 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         return None
 
     async def _async_wait_for_modes(
-        self, modes: set[WorkMode], timeout: float = 10.0
+        self,
+        modes: set[WorkMode],
+        timeout: float = 10.0,
+        *,
+        require_update: bool = False,
     ) -> bool:
         """Wait for the report stream to show one of the expected work modes."""
-        if self.rpt_dev_status.sys_status in modes:
+        if not require_update and self.rpt_dev_status.sys_status in modes:
             return True
 
         mode_seen = asyncio.Event()
@@ -250,10 +254,12 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             await self.coordinator.async_start_report_stream(
                 duration_ms=int(timeout * 1000)
             )
-            if self.rpt_dev_status.sys_status in modes:
+            if not require_update and self.rpt_dev_status.sys_status in modes:
                 return True
             await asyncio.wait_for(mode_seen.wait(), timeout)
         except TimeoutError:
+            if require_update:
+                return False
             return self.rpt_dev_status.sys_status in modes
         finally:
             remove_listener()
@@ -266,7 +272,9 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key=trans_key
             )
-        if not await self._async_wait_for_modes({WorkMode.MODE_WORKING}):
+        if not await self._async_wait_for_modes(
+            {WorkMode.MODE_WORKING}, require_update=True
+        ):
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key=trans_key
             )
