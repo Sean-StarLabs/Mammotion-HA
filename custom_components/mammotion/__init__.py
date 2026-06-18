@@ -37,6 +37,7 @@ from pymammotion.aliyun.exceptions import TooManyRequestsException
 from pymammotion.aliyun.model.dev_by_account_response import Device
 from pymammotion.client import MammotionClient
 from pymammotion.data.model.device import MowingDevice
+from pymammotion.device.handle import DeviceHandle
 from pymammotion.device.state_reducer import MowerStateReducer
 from pymammotion.proto import LubaMsg
 from pymammotion.transport.base import (
@@ -125,6 +126,26 @@ _LUBA_SUB_MESSAGES = (
     "ctrl",
 )
 _ORIGINAL_MOWER_STATE_REDUCER_APPLY = MowerStateReducer.apply
+_ORIGINAL_DEVICE_HANDLE_START_DYNAMICS_LINE_LOOP = (
+    DeviceHandle._start_dynamics_line_loop
+)
+
+
+def _disable_dynamics_line_loop(handle: DeviceHandle) -> None:
+    """Disable pymammotion's direct dynamics-line polling.
+
+    The integration currently keeps live trails from report locations.  The
+    library loop uses the common-data saga every 10 seconds over BLE while a
+    mower is active; on Yuka this can fail repeatedly and monopolise the
+    command queue, blocking real controls.
+    """
+    LOGGER.debug(
+        "Skipping pymammotion dynamics-line loop for %s; HA location trail is used",
+        handle.device_name,
+    )
+
+
+DeviceHandle._start_dynamics_line_loop = _disable_dynamics_line_loop
 
 
 def _luba_submessage_names(message: LubaMsg) -> list[str]:
