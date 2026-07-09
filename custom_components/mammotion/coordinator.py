@@ -485,6 +485,8 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         self,
         command: str,
         expected_field: str,
+        *,
+        prefer_ble: bool | None = None,
         **kwargs: Any,
     ) -> Any | None:
         """Send a command and wait for response with standard exception handling.
@@ -506,11 +508,13 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
                 **kwargs,
             )
 
+        preferred_ble = self._bluetooth_enabled if prefer_ble is None else prefer_ble
+
         try:
             try:
-                response = await _send(self._bluetooth_enabled)
+                response = await _send(preferred_ble)
             except CommandTimeoutError:
-                if not self._bluetooth_enabled:
+                if not preferred_ble:
                     raise
                 LOGGER.warning(
                     "Command %s for %s timed out over preferred BLE; retrying via MQTT",
@@ -841,7 +845,12 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
     async def async_read_rain_detection(self) -> None:
         """Read current rain detection state from device."""
         await self.async_send_and_wait(
-            "read_write_device", self._rw_expected_field(3), rw_id=3, context=0, rw=0
+            "read_write_device",
+            self._rw_expected_field(3),
+            prefer_ble=False,
+            rw_id=3,
+            context=0,
+            rw=0,
         )
 
     async def async_set_sidelight(self, on_off: int) -> None:
@@ -891,7 +900,12 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
     async def async_read_traversal_mode(self) -> None:
         """Read current traversal mode from device."""
         await self.async_send_and_wait(
-            "read_write_device", self._rw_expected_field(7), rw_id=7, context=0, rw=0
+            "read_write_device",
+            self._rw_expected_field(7),
+            prefer_ble=False,
+            rw_id=7,
+            context=0,
+            rw=0,
         )
 
     async def async_set_wildlife_safety(self, mode: int) -> None:
@@ -919,10 +933,20 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
     async def async_read_wildlife_safety(self) -> None:
         """Read current wildlife safety status and mode from device."""
         await self.async_send_and_wait(
-            "read_write_device", self._rw_expected_field(13), rw_id=13, context=0, rw=0
+            "read_write_device",
+            self._rw_expected_field(13),
+            prefer_ble=False,
+            rw_id=13,
+            context=0,
+            rw=0,
         )
         await self.async_send_and_wait(
-            "read_write_device", self._rw_expected_field(12), rw_id=12, context=0, rw=0
+            "read_write_device",
+            self._rw_expected_field(12),
+            prefer_ble=False,
+            rw_id=12,
+            context=0,
+            rw=0,
         )
 
     async def async_set_turning_mode(self, context: int) -> None:
@@ -934,7 +958,12 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
     async def async_read_turning_mode(self) -> None:
         """Read current turning mode from device."""
         await self.async_send_and_wait(
-            "read_write_device", self._rw_expected_field(6), rw_id=6, context=0, rw=0
+            "read_write_device",
+            self._rw_expected_field(6),
+            prefer_ble=False,
+            rw_id=6,
+            context=0,
+            rw=0,
         )
 
     async def async_blade_height(self, height: int) -> int:
@@ -1059,6 +1088,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         await self.async_send_and_wait(
             "read_write_device",
             "bidire_comm_cmd",
+            prefer_ble=False,
             rw_id=5,
             rw=1,
             context=1,
@@ -1665,16 +1695,23 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         * ``out_of_sync`` — neither of the above: the cached map is stale or
           incomplete and a fresh ``async_sync_maps()`` is needed.
         """
-        handle = self.manager.mower(self.device_name)
-        if handle is not None and handle.queue.is_saga_active:
-            return "syncing"
-
         if self.data is None:
             return "out_of_sync"
 
         mower_data = self.data
         locations = mower_data.report_data.locations
         bol_hash = locations[0].bol_hash if locations else 0
+        try:
+            active_task = int(mower_data.report_data.dev.sys_status) in LIVE_REPORT_MODES
+        except (TypeError, ValueError):
+            active_task = False
+        if active_task:
+            return "synced" if mower_data.map.is_map_synced(bol_hash) else "out_of_sync"
+
+        handle = self.manager.mower(self.device_name)
+        if handle is not None and handle.queue.is_saga_active:
+            return "syncing"
+
         if mower_data.map.is_map_synced(bol_hash):
             return "synced"
         return "out_of_sync"
@@ -2313,7 +2350,11 @@ class MammotionMapUpdateCoordinator(MammotionBaseUpdateCoordinator[MowerInfo]):
                 if device.report_data.locations
                 else 0
             )
-            if not device.map.is_map_synced(bol_hash):
+            try:
+                active_task = int(device.report_data.dev.sys_status) in LIVE_REPORT_MODES
+            except (TypeError, ValueError):
+                active_task = False
+            if not active_task and not device.map.is_map_synced(bol_hash):
                 await self.manager.start_map_sync(self.device_name)
 
         except DeviceOfflineException as ex:
@@ -2534,10 +2575,20 @@ class MammotionDeviceErrorUpdateCoordinator(
             WorkMode.MODE_PAUSE,
         ):
             await self.async_send_and_wait(
-                "read_write_device", "bidire_comm_cmd", rw_id=5, rw=1, context=2
+                "read_write_device",
+                "bidire_comm_cmd",
+                prefer_ble=False,
+                rw_id=5,
+                rw=1,
+                context=2,
             )
             await self.async_send_and_wait(
-                "read_write_device", "bidire_comm_cmd", rw_id=5, rw=1, context=3
+                "read_write_device",
+                "bidire_comm_cmd",
+                prefer_ble=False,
+                rw_id=5,
+                rw=1,
+                context=3,
             )
 
     async def _async_setup(self) -> None:
@@ -2554,10 +2605,20 @@ class MammotionDeviceErrorUpdateCoordinator(
 
         try:
             await self.async_send_and_wait(
-                "read_write_device", "bidire_comm_cmd", rw_id=5, rw=1, context=2
+                "read_write_device",
+                "bidire_comm_cmd",
+                prefer_ble=False,
+                rw_id=5,
+                rw=1,
+                context=2,
             )
             await self.async_send_and_wait(
-                "read_write_device", "bidire_comm_cmd", rw_id=5, rw=1, context=3
+                "read_write_device",
+                "bidire_comm_cmd",
+                prefer_ble=False,
+                rw_id=5,
+                rw=1,
+                context=3,
             )
             if not device.errors.error_codes and self.has_cloud_account:
                 http = self.manager.mammotion_http
