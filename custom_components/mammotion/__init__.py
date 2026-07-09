@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from asyncio import CancelledError
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
 from aiohttp import ClientConnectorError
+from aioesphomeapi.core import BluetoothGATTAPIError
+from bleak.exc import BleakError
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
@@ -491,8 +492,14 @@ async def _await_device_connection(
         and (ble := handle.get_transport(TransportType.BLE))
         and ble.is_usable
     ):
-        with suppress(TransportError):
+        try:
             await handle.connect_transport(TransportType.BLE)
+        except (TransportError, BluetoothGATTAPIError, BleakError) as err:
+            LOGGER.warning(
+                "BLE setup connection failed for %s; continuing with available transports: %s",
+                device_name,
+                err,
+            )
     try:
         await handle.wait_until_connected(timeout=60, mqtt_stable_for=10)
     except CancelledError:
