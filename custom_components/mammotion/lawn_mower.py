@@ -275,16 +275,25 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
     async def _async_start_job_and_verify(self, trans_key: str) -> None:
         """Start the planned job and verify the mower actually begins work."""
-        if not await self.coordinator.async_send_command("start_job"):
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key=trans_key
+        command_acked = await self.coordinator.async_send_command("start_job")
+        if not command_acked:
+            LOGGER.debug(
+                "Start job for %s did not return an immediate ack; waiting for report stream",
+                self.coordinator.device_name,
             )
-        if not await self._async_wait_for_modes(
-            {WorkMode.MODE_WORKING}, require_update=True
+        if await self._async_wait_for_modes(
+            {WorkMode.MODE_WORKING}, timeout=30, require_update=True
         ):
+            return
+        if not command_acked:
+            LOGGER.warning(
+                "Start job for %s returned no ack and no working state was observed",
+                self.coordinator.device_name,
+            )
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key=trans_key
             )
+        raise HomeAssistantError(translation_domain=DOMAIN, translation_key=trans_key)
 
     async def async_start_mowing(self, **kwargs: Any) -> None:
         """Start mowing."""
