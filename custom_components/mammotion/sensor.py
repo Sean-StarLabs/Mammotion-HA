@@ -63,6 +63,20 @@ from .entity import (
 from .yuka import is_yuka_2
 
 
+def _safe_enum_name(enum_type: type, value: object) -> str:
+    """Return an enum member name without invoking noisy library fallback paths."""
+    member = getattr(enum_type, "_value2member_map_", {}).get(value)
+    if member is not None:
+        return str(member.name)
+    try:
+        for member in enum_type:
+            if getattr(member, "value", None) == value:
+                return str(member.name)
+    except TypeError:
+        pass
+    return f"UNKNOWN_{value}"
+
+
 class MowerDataFormatter:
     """Helper class for formatting mower data."""
 
@@ -176,9 +190,9 @@ LUBA_2_YUKA_ONLY_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         state_class=None,
         device_class=SensorDeviceClass.ENUM,
         native_unit_of_measurement=None,
-        value_fn=lambda mower_data: VioState(
-            mower_data.report_data.vision_info.vio_state
-        ).name,
+        value_fn=lambda mower_data: _safe_enum_name(
+            VioState, mower_data.report_data.vision_info.vio_state
+        ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     MammotionSensorEntityDescription(
@@ -377,9 +391,9 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         key="position_mode",
         state_class=None,
         device_class=SensorDeviceClass.ENUM,
-        value_fn=lambda mower_data: RTKPositionMode(
-            mower_data.report_data.basestation_info.rtk_status
-        ).name,
+        value_fn=lambda mower_data: _safe_enum_name(
+            RTKPositionMode, mower_data.report_data.basestation_info.rtk_status
+        ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     MammotionSensorEntityDescription(
@@ -387,8 +401,8 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         state_class=None,
         device_class=SensorDeviceClass.ENUM,
         native_unit_of_measurement=None,
-        value_fn=lambda mower_data: str(
-            PosType(mower_data.location.position_type).name
+        value_fn=lambda mower_data: _safe_enum_name(
+            PosType, mower_data.location.position_type
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
