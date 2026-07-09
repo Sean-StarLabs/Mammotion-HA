@@ -19,11 +19,12 @@ AREA_STROKE = (59, 191, 97, 255)
 OBSTACLE_FILL = (255, 149, 20, 85)
 OBSTACLE_STROKE = (255, 149, 20, 230)
 PATH_STROKE = (45, 45, 45, 240)
-TRAIL_STROKE = (35, 119, 235, 170)
-TRAIL_RECENT_STROKE = (35, 119, 235, 230)
+TRAIL_SHADOW_STROKE = (20, 28, 36, 95)
+TRAIL_STROKE = (215, 220, 225, 150)
+TRAIL_RECENT_STROKE = (255, 255, 255, 230)
 VIRTUAL_STROKE = (220, 40, 40, 230)
-MOWER_FILL = (35, 119, 235, 255)
-MOWER_STROKE = (255, 255, 255, 255)
+MOWER_FILL = (245, 247, 248, 255)
+MOWER_STROKE = (82, 90, 98, 220)
 OSM_MAX_ZOOM = 19
 OSM_TILE_SIZE = 256
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -256,12 +257,19 @@ def _draw_geojson_feature(
                 project((float(coord[0]), float(coord[1]))) for coord in coordinates
             ]
             if len(line) >= 2:
+                if type_name == "trail":
+                    draw.line(line, fill=TRAIL_SHADOW_STROKE, width=7, joint="curve")
                 draw.line(line, fill=stroke, width=4, joint="curve")
     elif geometry_type == "Point":
         coord = geometry.get("coordinates", [])
         if len(coord) < 2:
             return
         center = project((float(coord[0]), float(coord[1])))
+        if type_name == "station":
+            _draw_station_marker(draw, center)
+            if name:
+                _draw_text(draw, str(name), (center[0] + 14, center[1] - 8))
+            return
         radius = 8 if type_name == "station" else 6
         draw.ellipse(
             (
@@ -279,31 +287,69 @@ def _draw_geojson_feature(
 
 
 def _draw_mower_marker(draw: ImageDraw.ImageDraw, center: tuple[float, float]) -> None:
-    radius = 12
-    draw.ellipse(
+    """Draw a small Yuka-style mower marker."""
+    x, y = center
+    width = 24
+    height = 17
+    outline_width = 1
+    draw.rounded_rectangle(
         (
-            center[0] - radius - 3,
-            center[1] - radius - 3,
-            center[0] + radius + 3,
-            center[1] + radius + 3,
+            x - width / 2 - 2,
+            y - height / 2 - 2,
+            x + width / 2 + 2,
+            y + height / 2 + 2,
         ),
-        fill=(0, 0, 0, 70),
+        radius=7,
+        fill=(0, 0, 0, 65),
     )
-    draw.ellipse(
-        (
-            center[0] - radius,
-            center[1] - radius,
-            center[0] + radius,
-            center[1] + radius,
-        ),
+    draw.rounded_rectangle(
+        (x - width / 2, y - height / 2, x + width / 2, y + height / 2),
+        radius=6,
         fill=MOWER_FILL,
         outline=MOWER_STROKE,
-        width=4,
+        width=outline_width,
     )
-    draw.ellipse(
-        (center[0] - 4, center[1] - 4, center[0] + 4, center[1] + 4),
-        fill=(255, 255, 255, 255),
+    draw.rounded_rectangle(
+        (
+            x - width * 0.28,
+            y - height * 0.18,
+            x + width * 0.28,
+            y + height * 0.18,
+        ),
+        radius=3,
+        fill=(35, 42, 48, 235),
     )
+    wheel_radius = 2
+    for wx in (x - width * 0.38, x + width * 0.38):
+        draw.ellipse(
+            (
+                wx - wheel_radius,
+                y + height * 0.18 - wheel_radius,
+                wx + wheel_radius,
+                y + height * 0.18 + wheel_radius,
+            ),
+            fill=(80, 190, 120, 255),
+        )
+
+
+def _draw_station_marker(draw: ImageDraw.ImageDraw, center: tuple[float, float]) -> None:
+    """Draw a compact mower dock/station marker."""
+    x, y = center
+    half_w = 13
+    half_h = 8
+    draw.rounded_rectangle(
+        (x - half_w, y - half_h, x + half_w, y + half_h),
+        radius=5,
+        fill=(248, 249, 250, 245),
+        outline=(84, 92, 100, 220),
+        width=1,
+    )
+    draw.rounded_rectangle(
+        (x - 8, y - 2, x + 8, y + 2),
+        radius=2,
+        fill=(36, 42, 48, 235),
+    )
+    draw.ellipse((x + 7, y + 3, x + 11, y + 7), fill=(80, 190, 120, 255))
 
 
 def _draw_trail(
@@ -314,10 +360,11 @@ def _draw_trail(
     if len(trail_points) < 2:
         return
     line = [project(point) for point in trail_points]
-    draw.line(line, fill=TRAIL_STROKE, width=5, joint="curve")
+    draw.line(line, fill=TRAIL_SHADOW_STROKE, width=7, joint="curve")
+    draw.line(line, fill=TRAIL_STROKE, width=4, joint="curve")
     recent = line[-min(len(line), 40) :]
     if len(recent) >= 2:
-        draw.line(recent, fill=TRAIL_RECENT_STROKE, width=7, joint="curve")
+        draw.line(recent, fill=TRAIL_RECENT_STROKE, width=5, joint="curve")
 
 
 def _feature_colours(
