@@ -215,7 +215,10 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
         position_type = self.coordinator.data.location.position_type
         LOGGER.debug("activity mode %s", mode)
-        if mode == WorkMode.MODE_READY and position_type == PosType.CHARGE_ON.value:
+        if (
+            mode in (WorkMode.MODE_READY, WorkMode.MODE_PAUSE)
+            and position_type == PosType.CHARGE_ON.value
+        ):
             return LawnMowerActivity.DOCKED
         if mode == WorkMode.MODE_PAUSE or (
             mode == WorkMode.MODE_READY and charge_state == 0

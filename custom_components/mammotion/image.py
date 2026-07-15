@@ -12,6 +12,7 @@ from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from pymammotion.utility.constant import WorkMode
+from pymammotion.utility.constant.device_constant import PosType
 
 from . import MammotionConfigEntry
 from .coordinator import MammotionReportUpdateCoordinator
@@ -58,7 +59,11 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Invalidate image when live mower telemetry changes."""
-        self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
+        mower = self.coordinator.manager.get_device_by_name(
+            self.coordinator.device_name
+        )
+        if mower is not None and self._is_live_report_active(mower):
+            self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         super()._handle_coordinator_update()
 
     @callback
@@ -132,6 +137,15 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         try:
             mode = int(mower.report_data.dev.sys_status or 0)
         except (TypeError, ValueError):
+            return False
+        try:
+            position_type = int(mower.location.position_type or 0)
+        except (TypeError, ValueError):
+            position_type = 0
+        if position_type == int(PosType.CHARGE_ON.value) and mode in {
+            int(WorkMode.MODE_READY),
+            int(WorkMode.MODE_PAUSE),
+        }:
             return False
         return mode in {
             int(WorkMode.MODE_WORKING),
