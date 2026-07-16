@@ -9,6 +9,7 @@
       "no_longer_present": "Device is no longer present",
       "not_supported": "Device not supported",
       "reconfigure_successful": "Re-configure successful",
+      "reauth_successful": "Re-authentication successful",
       "api_limit_exceeded": "API rate limit has been exceeded. Please try again later."
     },
     "error": {
@@ -30,6 +31,13 @@
           "account_name": "Mammotion email or account number",
           "password": "Mammotion account password"
         }
+      },
+      "reauth_confirm": {
+        "data": {
+          "account_name": "Mammotion email or account number",
+          "password": "Mammotion account password"
+        },
+        "description": "Enter your Mammotion account credentials again. Bluetooth control remains available while cloud authentication is unavailable."
       },
       "user": {
         "data": {
