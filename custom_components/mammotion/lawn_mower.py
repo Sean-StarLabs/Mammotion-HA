@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import copy
-from datetime import time
+from datetime import UTC, datetime, time, timedelta
 from typing import Any, cast
 
 import voluptuous as vol
@@ -28,6 +28,7 @@ from . import MammotionConfigEntry
 from .const import COMMAND_EXCEPTIONS, DOMAIN, LOGGER
 from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
+from .errors import get_mammotion_error_details
 
 SERVICE_START_MOWING = "start_mow"
 SERVICE_CANCEL_JOB = "cancel_job"
@@ -281,6 +282,16 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             {WorkMode.MODE_WORKING}, timeout=30, require_update=True
         ):
             return
+        await self.coordinator.async_request_report_snapshot()
+        error = get_mammotion_error_details(
+            self.coordinator.data, self.hass.config.language
+        )
+        if (
+            error is not None
+            and error.occurred_at is not None
+            and error.occurred_at >= datetime.now(UTC) - timedelta(minutes=10)
+        ):
+            raise HomeAssistantError(f"Mammotion error {error.code}: {error.message}")
         if not command_acked:
             LOGGER.warning(
                 "Start job for %s returned no ack and no working state was observed",
