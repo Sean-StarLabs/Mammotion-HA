@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
 from pymammotion.data.model.device import MowingDevice
+from pymammotion.utility.constant import WorkMode
+from pymammotion.utility.constant.device_constant import PosType
+
+ERROR_ACTIVE_WINDOW = timedelta(minutes=10)
+
+
+class MammotionErrorClassification(StrEnum):
+    """Operational impact of a reported Mammotion error."""
+
+    BLOCKING = "blocking"
+    WARNING = "warning"
+    NON_BLOCKING = "non_blocking"
+    HISTORY = "history"
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +29,7 @@ class MammotionErrorDetails:
     code: int
     occurred_at: datetime | None
     message: str
+    catalogue_level: int | None
 
 
 def get_mammotion_error_details(
@@ -42,11 +57,47 @@ def get_mammotion_error_details(
 
     error_info = device.errors.error_codes.get(str(code))
     if error_info is None:
-        return MammotionErrorDetails(code, occurred_at, "Error message not found")
+        return MammotionErrorDetails(code, occurred_at, "Error message not found", None)
 
     implication = getattr(error_info, f"{language}_implication", "")
     solution = getattr(error_info, f"{language}_solution", "")
     implication = implication or error_info.en_implication
     solution = solution or error_info.en_solution
     message = f"{error_info.module}: {implication}, {solution}"
-    return MammotionErrorDetails(code, occurred_at, message)
+    try:
+        catalogue_level = int(error_info.level)
+    except (TypeError, ValueError):
+        catalogue_level = None
+    return MammotionErrorDetails(code, occurred_at, message, catalogue_level)
+
+
+def classify_mammotion_error(
+    device: MowingDevice,
+    error: MammotionErrorDetails,
+    *,
+    command_rejected: bool = False,
+    now: datetime | None = None,
+) -> MammotionErrorClassification:
+    """Classify an error by its observed effect on the mower."""
+    if command_rejected:
+        return MammotionErrorClassification.BLOCKING
+
+    mode = device.report_data.dev.sys_status
+    if mode == WorkMode.MODE_LOCK:
+        return MammotionErrorClassification.BLOCKING
+    if mode == WorkMode.MODE_PAUSE and int(device.location.position_type) != int(
+        PosType.CHARGE_ON
+    ):
+        return MammotionErrorClassification.BLOCKING
+
+    if error.occurred_at is None:
+        return MammotionErrorClassification.HISTORY
+    current_time = now or datetime.now(UTC)
+    if current_time - error.occurred_at > ERROR_ACTIVE_WINDOW:
+        return MammotionErrorClassification.HISTORY
+
+    if mode in {WorkMode.MODE_READY, WorkMode.MODE_INITIALIZATION}:
+        return MammotionErrorClassification.BLOCKING
+    if mode in {WorkMode.MODE_WORKING, WorkMode.MODE_RETURNING}:
+        return MammotionErrorClassification.NON_BLOCKING
+    return MammotionErrorClassification.WARNING
