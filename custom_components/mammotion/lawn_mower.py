@@ -28,7 +28,7 @@ from . import MammotionConfigEntry
 from .const import COMMAND_EXCEPTIONS, DOMAIN, LOGGER
 from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
-from .errors import get_mammotion_error_details
+from .errors import classify_mammotion_error, get_mammotion_error_details
 
 SERVICE_START_MOWING = "start_mow"
 SERVICE_CANCEL_JOB = "cancel_job"
@@ -295,7 +295,12 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             and error.occurred_at is not None
             and error.occurred_at >= datetime.now(UTC) - timedelta(minutes=10)
         ):
-            raise HomeAssistantError(f"Mammotion error {error.code}: {error.message}")
+            classification = classify_mammotion_error(
+                self.coordinator.data, error, command_rejected=True
+            )
+            raise HomeAssistantError(
+                f"Mammotion {classification.value} error {error.code}: {error.message}"
+            )
         if not command_acked:
             LOGGER.warning(
                 "Start job for %s returned no ack and no working state was observed",

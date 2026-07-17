@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import time
 from functools import partial
+from typing import Any
 
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.sensor import (
@@ -59,6 +60,11 @@ from .entity import (
     MammotionBaseEntity,
     MammotionBaseRTKEntity,
     MammotionBaseSpinoEntity,
+)
+from .errors import (
+    MammotionErrorClassification,
+    classify_mammotion_error,
+    get_mammotion_error_details,
 )
 from .yuka import is_yuka_2
 
@@ -984,6 +990,25 @@ class MammotionErrorSensorEntity(MammotionBaseEntity, SensorEntity):
     def native_value(self) -> StateType:
         """Return the state of the sensor."""
         return self.entity_description.value_fn(self.coordinator, self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return operational context for the latest error message."""
+        if self.entity_description.key != "error_1_message":
+            return None
+        error = get_mammotion_error_details(
+            self.coordinator.data, self.hass.config.language
+        )
+        if error is None:
+            return None
+        classification = classify_mammotion_error(self.coordinator.data, error)
+        return {
+            "code": error.code,
+            "occurred_at": error.occurred_at,
+            "catalogue_level": error.catalogue_level,
+            "classification": classification.value,
+            "blocking": classification is MammotionErrorClassification.BLOCKING,
+        }
 
 
 class MammotionWorkSensorEntity(MammotionBaseEntity, SensorEntity):
