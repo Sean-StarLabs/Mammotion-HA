@@ -97,6 +97,7 @@ from .const import (
     LOGGER,
     NO_REQUEST_MODES,
 )
+from .errors import get_mammotion_error_details
 from .yuka import is_yuka_2
 
 if TYPE_CHECKING:
@@ -2502,53 +2503,24 @@ class MammotionDeviceErrorUpdateCoordinator(
 
     def get_error_code(self, number: int) -> int:
         """Get error code from an error code list."""
-        try:
-            return int(abs(next(iter(self.data.errors.err_code_list))))
-        except StopIteration:
-            return 0
+        details = get_mammotion_error_details(
+            self.data, self.hass.config.language, number
+        )
+        return details.code if details is not None else 0
 
     def get_error_time(self, number: int) -> datetime.datetime | None:
         """Get error time from an error code list."""
-        try:
-            return datetime.datetime.fromtimestamp(
-                next(iter(self.data.errors.err_code_list_time)), datetime.UTC
-            )
-        except StopIteration:
-            return None
+        details = get_mammotion_error_details(
+            self.data, self.hass.config.language, number
+        )
+        return details.occurred_at if details is not None else None
 
     def get_error_message(self, number: int) -> str:
         """Return error message."""
-        try:
-            error_code: int = next(iter(self.data.errors.err_code_list))
-
-            error_code = abs(error_code)
-            error_info: ErrorInfo = self.data.errors.error_codes[f"{error_code}"]
-
-            implication = (
-                getattr(error_info, f"{self.hass.config.language}_implication")
-                if hasattr(error_info, f"{self.hass.config.language}_implication")
-                else error_info.en_implication
-            )
-            solution = (
-                getattr(error_info, f"{self.hass.config.language}_solution")
-                if hasattr(error_info, f"{self.hass.config.language}_solution")
-                else error_info.en_solution
-            )
-
-            if implication == "":
-                implication = error_info.en_implication
-
-            if solution == "":
-                solution = error_info.en_solution
-
-            return f"{error_info.module}: {implication}, {solution}"
-
-        except StopIteration:
-            """Failed to get error code."""
-            return "No Error"
-        except KeyError:
-            """Failed to get error message."""
-            return "Error message not found"
+        details = get_mammotion_error_details(
+            self.data, self.hass.config.language, number
+        )
+        return details.message if details is not None else "No Error"
 
     async def _async_update_data(self) -> MowingDevice:
         """Get data from the device."""
