@@ -70,6 +70,16 @@ See the wiki for how to [get started](https://github.com/mikey0000/Mammotion-HA/
 
 Once the integration is set up, you can control and monitor your Mammotion mower using Home Assistant. 🎉
 
+## Map Background
+
+The map image uses OpenStreetMap by default. Select **Satellite (Esri World
+Imagery)** under the integration's configure options to use satellite imagery
+without an API key. Map tiles are cached locally and include the provider's
+attribution in the rendered image.
+
+The current mowing trail is retained after the task finishes and remains visible
+until the next task starts.
+
 ## Map Position Offset
 
 Satellite map tiles (Google Maps, OpenStreetMap, etc.) are sometimes misaligned relative to RTK GPS coordinates by several metres. Each mower exposes two number entities to correct this:

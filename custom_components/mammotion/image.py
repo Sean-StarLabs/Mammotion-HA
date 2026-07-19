@@ -15,9 +15,20 @@ from pymammotion.utility.constant import WorkMode
 from pymammotion.utility.constant.device_constant import PosType
 
 from . import MammotionConfigEntry
+from .const import (
+    CONF_MAP_BASE_LAYER,
+    MAP_BASE_LAYER_OPENSTREETMAP,
+    MAP_BASE_LAYER_SATELLITE,
+)
 from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
-from .map_renderer import placeholder_png, render_map_png
+from .map_renderer import (
+    ESRI_WORLD_IMAGERY_TILE_PROVIDER,
+    OPENSTREETMAP_TILE_PROVIDER,
+    MapTileProvider,
+    placeholder_png,
+    render_map_png,
+)
 
 
 async def async_setup_entry(
@@ -59,11 +70,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Invalidate image when live mower telemetry changes."""
-        mower = self.coordinator.manager.get_device_by_name(
-            self.coordinator.device_name
-        )
-        if mower is not None and self._is_live_report_active(mower):
-            self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
+        self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         super()._handle_coordinator_update()
 
     @callback
@@ -82,26 +89,43 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
 
         geojson = self._merged_geojson(mower)
         mower_location = self._offset_location(mower.location.device)
-        mower_trail = (
-            list(getattr(self.coordinator, "location_trail", []))
-            if self._is_live_report_active(mower)
-            else []
+        mower_trail = list(getattr(self.coordinator, "location_trail", []))
+        tile_provider = self._tile_provider()
+        content_key = self._content_key(
+            geojson,
+            mower_location,
+            mower_trail,
+            tile_provider.key,
         )
-        content_key = self._content_key(geojson, mower_location, mower_trail)
         if self._cached_png is not None and content_key == self._last_content_key:
             return self._cached_png
 
-        tile_cache_dir = self.hass.config.path(".storage", "mammotion_osm_tiles")
+        tile_cache_dir = self.hass.config.path(
+            ".storage",
+            "mammotion_map_tiles",
+            tile_provider.key,
+        )
         self._cached_png = await self.hass.async_add_executor_job(
             render_map_png,
             geojson,
             tile_cache_dir,
             mower_location,
             mower_trail,
+            tile_provider,
         )
         self._last_content_key = content_key
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         return self._cached_png
+
+    def _tile_provider(self) -> MapTileProvider:
+        """Return the configured map background provider."""
+        base_layer = self.coordinator.config_entry.options.get(
+            CONF_MAP_BASE_LAYER,
+            MAP_BASE_LAYER_OPENSTREETMAP,
+        )
+        if base_layer == MAP_BASE_LAYER_SATELLITE:
+            return ESRI_WORLD_IMAGERY_TILE_PROVIDER
+        return OPENSTREETMAP_TILE_PROVIDER
 
     @staticmethod
     def _merged_geojson(mower: Any) -> dict[str, Any] | None:
@@ -227,6 +251,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         geojson: dict[str, Any] | None,
         mower_location: Any | None,
         mower_trail: list[tuple[float, float]],
+        tile_provider_key: str,
     ) -> str:
         location_key = None
         if mower_location is not None:
@@ -241,5 +266,6 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
                 (round(float(lon), 7), round(float(lat), 7))
                 for lon, lat in mower_trail[-80:]
             ],
+            "tile_provider": tile_provider_key,
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))

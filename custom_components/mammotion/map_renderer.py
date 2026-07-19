@@ -32,6 +32,35 @@ OSM_USER_AGENT = "HomeAssistant-Mammotion-Map/1.0"
 
 
 @dataclass(frozen=True)
+class MapTileProvider:
+    """Describe a raster tile source used by the static map renderer."""
+
+    key: str
+    url_template: str
+    attribution: str
+    user_agent: str = OSM_USER_AGENT
+
+    def tile_url(self, zoom: int, tile_x: int, tile_y: int) -> str:
+        """Return the URL for one XYZ map tile."""
+        return self.url_template.format(z=zoom, x=tile_x, y=tile_y)
+
+
+OPENSTREETMAP_TILE_PROVIDER = MapTileProvider(
+    key="openstreetmap",
+    url_template=OSM_TILE_URL,
+    attribution="© OpenStreetMap contributors",
+)
+ESRI_WORLD_IMAGERY_TILE_PROVIDER = MapTileProvider(
+    key="esri_world_imagery",
+    url_template=(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/"
+        "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+    ),
+    attribution="Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics",
+)
+
+
+@dataclass(frozen=True)
 class GeoBounds:
     """Geographic bounds in WGS84 lon/lat."""
 
@@ -89,6 +118,7 @@ def render_map_png(
     tile_cache_dir: str | None = None,
     mower_location: Any | None = None,
     mower_trail: list[tuple[float, float]] | None = None,
+    tile_provider: MapTileProvider = OPENSTREETMAP_TILE_PROVIDER,
 ) -> bytes:
     """Render a Mammotion GeoJSON map into a static PNG."""
     mower_point = _geo_location_point(mower_location)
@@ -125,6 +155,7 @@ def render_map_png(
         source_width,
         source_height,
         tile_cache_dir,
+        tile_provider,
     )
     image = source.resize(CANVAS_SIZE, Image.Resampling.BICUBIC)
     draw = ImageDraw.Draw(image, "RGBA")
@@ -144,6 +175,8 @@ def render_map_png(
     if mower_point is not None:
         _draw_mower_marker(draw, project(mower_point))
 
+    _draw_attribution(draw, tile_provider.attribution)
+
     return _encode(image)
 
 
@@ -154,6 +187,7 @@ def _render_osm_source(
     source_width: float,
     source_height: float,
     tile_cache_dir: str | None,
+    tile_provider: MapTileProvider,
 ) -> Image.Image:
     source = Image.new(
         "RGBA",
@@ -172,7 +206,13 @@ def _render_osm_source(
 
     for tile_x in range(min_tile_x, max_tile_x + 1):
         for tile_y in range(min_tile_y, max_tile_y + 1):
-            tile = _load_osm_tile(zoom, tile_x, tile_y, tile_cache_dir)
+            tile = _load_osm_tile(
+                zoom,
+                tile_x,
+                tile_y,
+                tile_cache_dir,
+                tile_provider,
+            )
             if tile is None:
                 continue
             source.alpha_composite(
@@ -186,7 +226,11 @@ def _render_osm_source(
 
 
 def _load_osm_tile(
-    zoom: int, tile_x: int, tile_y: int, tile_cache_dir: str | None
+    zoom: int,
+    tile_x: int,
+    tile_y: int,
+    tile_cache_dir: str | None,
+    tile_provider: MapTileProvider,
 ) -> Image.Image | None:
     cache_path: Path | None = None
     if tile_cache_dir:
@@ -197,12 +241,15 @@ def _load_osm_tile(
             except OSError:
                 cache_path.unlink(missing_ok=True)
 
-    request = Request(
-        OSM_TILE_URL.format(z=zoom, x=tile_x, y=tile_y),
-        headers={"User-Agent": OSM_USER_AGENT},
+    tile_url = tile_provider.tile_url(zoom, tile_x, tile_y)
+    if not tile_url.startswith("https://"):
+        return None
+    request = Request(  # noqa: S310 - providers are fixed HTTPS tile services
+        tile_url,
+        headers={"User-Agent": tile_provider.user_agent},
     )
     try:
-        with urlopen(request, timeout=5) as response:
+        with urlopen(request, timeout=5) as response:  # noqa: S310
             tile_bytes = response.read()
     except (HTTPError, OSError, TimeoutError, URLError):
         return None
@@ -215,6 +262,26 @@ def _load_osm_tile(
         return Image.open(BytesIO(tile_bytes)).copy()
     except OSError:
         return None
+
+
+def _draw_attribution(draw: ImageDraw.ImageDraw, attribution: str) -> None:
+    """Draw required tile-source attribution on the rendered image."""
+    padding = 5
+    text_bounds = draw.textbbox((0, 0), attribution)
+    width = text_bounds[2] - text_bounds[0]
+    height = text_bounds[3] - text_bounds[1]
+    left = CANVAS_SIZE[0] - width - (padding * 2)
+    top = CANVAS_SIZE[1] - height - (padding * 2)
+    draw.rounded_rectangle(
+        (left, top, CANVAS_SIZE[0], CANVAS_SIZE[1]),
+        radius=4,
+        fill=(255, 255, 255, 190),
+    )
+    draw.text(
+        (left + padding, top + padding),
+        attribution,
+        fill=(35, 35, 35, 230),
+    )
 
 
 def _draw_geojson_feature(
@@ -232,7 +299,7 @@ def _draw_geojson_feature(
             polygon = [project((float(coord[0]), float(coord[1]))) for coord in ring]
             if len(polygon) >= 3:
                 draw.polygon(polygon, fill=fill, outline=stroke)
-                draw.line(polygon + [polygon[0]], fill=stroke, width=3, joint="curve")
+                draw.line([*polygon, polygon[0]], fill=stroke, width=3, joint="curve")
         if name and type_name == "area":
             _draw_label(draw, str(name), _centroid(_geometry_points(geometry)), project)
     elif geometry_type == "MultiPolygon":
@@ -244,7 +311,7 @@ def _draw_geojson_feature(
                 if len(polygon) >= 3:
                     draw.polygon(polygon, fill=fill, outline=stroke)
                     draw.line(
-                        polygon + [polygon[0]], fill=stroke, width=3, joint="curve"
+                        [*polygon, polygon[0]], fill=stroke, width=3, joint="curve"
                     )
     elif geometry_type in {"LineString", "MultiLineString"}:
         lines = (

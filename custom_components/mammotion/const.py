@@ -45,6 +45,13 @@ CONF_PREFER_BLE: Final = "prefer_ble_over_wifi"
 CONF_MOVEMENT_USE_WIFI: Final = "movement_use_wifi"
 CONF_MOW_PATH_FETCH_ENABLED: Final = "mow_path_fetch_enabled"
 CONF_FULL_MAP_FETCH_ENABLED: Final = "full_map_fetch_enabled"
+CONF_MAP_BASE_LAYER: Final = "map_base_layer"
+MAP_BASE_LAYER_OPENSTREETMAP: Final = "openstreetmap"
+MAP_BASE_LAYER_SATELLITE: Final = "satellite"
+MAP_BASE_LAYER_OPTIONS: Final = {
+    MAP_BASE_LAYER_OPENSTREETMAP: "OpenStreetMap",
+    MAP_BASE_LAYER_SATELLITE: "Satellite (Esri World Imagery)",
+}
 CONF_ACCOUNTNAME: Final = "account_name"
 CONF_ACCOUNT_ID: Final = "mammotion_account_id"
 CONF_USE_WIFI: Final = "use_wifi"

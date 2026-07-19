@@ -34,6 +34,7 @@ from .const import (
     CONF_BLE_DEVICES,
     CONF_DEVICE_NAME,
     CONF_HAS_CLOUD_ACCOUNT,
+    CONF_MAP_BASE_LAYER,
     CONF_MOVEMENT_USE_WIFI,
     CONF_MOW_PATH_FETCH_ENABLED,
     CONF_PREFER_BLE,
@@ -41,6 +42,8 @@ from .const import (
     DEVICE_SUPPORT,
     DOMAIN,
     LOGGER,
+    MAP_BASE_LAYER_OPENSTREETMAP,
+    MAP_BASE_LAYER_OPTIONS,
 )
 
 
@@ -383,6 +386,9 @@ class MammotionConfigFlowHandler(OptionsFlow):
         self.mow_path_fetch_enabled = config_entry.options.get(
             CONF_MOW_PATH_FETCH_ENABLED, False
         )
+        self.map_base_layer = config_entry.options.get(
+            CONF_MAP_BASE_LAYER, MAP_BASE_LAYER_OPENSTREETMAP
+        )
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -417,6 +423,10 @@ class MammotionConfigFlowHandler(OptionsFlow):
                     CONF_MOW_PATH_FETCH_ENABLED,
                     default=self.mow_path_fetch_enabled,
                 ): cv.boolean,
+                vol.Optional(
+                    CONF_MAP_BASE_LAYER,
+                    default=self.map_base_layer,
+                ): vol.In(MAP_BASE_LAYER_OPTIONS),
             }
         )
 
