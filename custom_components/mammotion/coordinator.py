@@ -117,6 +117,7 @@ LOCATION_TRAIL_MIN_DISTANCE_METERS = 0.25
 LOCATION_TRAIL_SAVE_DELAY_SECONDS = 30
 LOCATION_TRAIL_STORE_VERSION = 1
 DYNAMICS_LINE_BACKOFF_SECONDS = 300
+SETUP_READ_TIMEOUT_SECONDS = 15
 DYNAMICS_LINE_FETCH_ENABLED = False
 LIVE_REPORT_MODES = {
     int(WorkMode.MODE_WORKING),
@@ -951,6 +952,20 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
             context=0,
             rw=0,
         )
+
+    async def _async_setup_read(
+        self, label: str, read: Callable[[], Any]
+    ) -> None:
+        """Run a non-critical setup read without blocking entry setup forever."""
+        try:
+            async with asyncio.timeout(SETUP_READ_TIMEOUT_SECONDS):
+                await read()
+        except TimeoutError:
+            LOGGER.debug(
+                "Setup read %s for %s timed out; continuing",
+                label,
+                self.device_name,
+            )
 
     async def async_set_turning_mode(self, context: int) -> None:
         """Set turning mode."""
@@ -1884,7 +1899,7 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
         was_active = self._location_trail_active
         previous_resume_pending = self._location_trail_resume_pending
         if active and not was_active:
-            if not self._location_trail_resume_pending:
+            if self.location_trail and not self._location_trail_resume_pending:
                 self._clear_live_location_trail(device)
             self._location_trail_resume_pending = False
         elif not active:
@@ -2142,8 +2157,12 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
                 await self.async_read_night_light()
                 await self.async_read_cutter_mode()
             if DeviceType.is_luba_pro(self.device_name):
-                await self.async_fetch_audio_config()
-                await self.async_read_wildlife_safety()
+                await self._async_setup_read(
+                    "audio config", self.async_fetch_audio_config
+                )
+                await self._async_setup_read(
+                    "wildlife safety", self.async_read_wildlife_safety
+                )
             await self.async_request_report_snapshot()
         except (
             DeviceOfflineException,
