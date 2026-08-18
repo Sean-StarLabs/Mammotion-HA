@@ -29,6 +29,12 @@ OSM_MAX_ZOOM = 19
 OSM_TILE_SIZE = 256
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 OSM_USER_AGENT = "HomeAssistant-Mammotion-Map/1.0"
+TRAIL_RENDER_MIN_DISTANCE_METERS = 0.8
+TRAIL_RENDER_MAX_SEGMENT_METERS = 40.0
+TRAIL_RENDER_SIMPLIFY_METERS = 1.5
+TRAIL_RENDER_SMOOTHING_PASSES = 2
+TRAIL_RENDER_DENOISE_WINDOW = 5
+TRAIL_RECENT_POINTS = 40
 
 
 @dataclass(frozen=True)
@@ -122,7 +128,8 @@ def render_map_png(
 ) -> bytes:
     """Render a Mammotion GeoJSON map into a static PNG."""
     mower_point = _geo_location_point(mower_location)
-    trail_points = _valid_geo_points(mower_trail or [])
+    trail_segments = _geo_trail_segments(_valid_geo_points(mower_trail or []))
+    trail_points = [point for segment in trail_segments for point in segment]
     points = _geometry_points(geojson or {})
     points.extend(trail_points)
     if mower_point is not None:
@@ -170,7 +177,7 @@ def render_map_png(
     for feature in (geojson or {}).get("features", []):
         _draw_geojson_feature(draw, feature, project)
 
-    _draw_trail(draw, trail_points, project)
+    _draw_trail(draw, trail_segments, project)
 
     if mower_point is not None:
         _draw_mower_marker(draw, project(mower_point))
@@ -320,12 +327,17 @@ def _draw_geojson_feature(
             else geometry.get("coordinates", [])
         )
         for coordinates in lines:
+            if type_name == "trail":
+                _draw_trail(
+                    draw,
+                    _geo_trail_segments(_valid_geo_points(coordinates)),
+                    project,
+                )
+                continue
             line = [
                 project((float(coord[0]), float(coord[1]))) for coord in coordinates
             ]
             if len(line) >= 2:
-                if type_name == "trail":
-                    draw.line(line, fill=TRAIL_SHADOW_STROKE, width=7, joint="curve")
                 draw.line(line, fill=stroke, width=4, joint="curve")
     elif geometry_type == "Point":
         coord = geometry.get("coordinates", [])
@@ -421,17 +433,26 @@ def _draw_station_marker(draw: ImageDraw.ImageDraw, center: tuple[float, float])
 
 def _draw_trail(
     draw: ImageDraw.ImageDraw,
-    trail_points: list[tuple[float, float]],
+    trail_segments: list[list[tuple[float, float]]],
     project,
 ) -> None:
-    if len(trail_points) < 2:
+    total_points = sum(len(segment) for segment in trail_segments)
+    if total_points < 2:
         return
-    line = [project(point) for point in trail_points]
-    draw.line(line, fill=TRAIL_SHADOW_STROKE, width=7, joint="curve")
-    draw.line(line, fill=TRAIL_STROKE, width=4, joint="curve")
-    recent = line[-min(len(line), 40) :]
-    if len(recent) >= 2:
-        draw.line(recent, fill=TRAIL_RECENT_STROKE, width=5, joint="curve")
+    recent_start = max(total_points - TRAIL_RECENT_POINTS, 0)
+    seen_points = 0
+    for segment in trail_segments:
+        if len(segment) < 2:
+            seen_points += len(segment)
+            continue
+        line = [project(point) for point in segment]
+        draw.line(line, fill=TRAIL_SHADOW_STROKE, width=7, joint="curve")
+        draw.line(line, fill=TRAIL_STROKE, width=4, joint="curve")
+        segment_recent_start = max(recent_start - seen_points, 0)
+        recent = line[segment_recent_start:]
+        if len(recent) >= 2:
+            draw.line(recent, fill=TRAIL_RECENT_STROKE, width=5, joint="curve")
+        seen_points += len(segment)
 
 
 def _feature_colours(
@@ -494,6 +515,185 @@ def _draw_text(draw: ImageDraw.ImageDraw, text: str, xy: tuple[float, float]) ->
         outline=(60, 60, 60, 90),
     )
     draw.text((x, y), text, fill=(30, 30, 30, 255))
+
+
+def _geo_trail_segments(
+    points: list[tuple[float, float]],
+) -> list[list[tuple[float, float]]]:
+    """Return display-ready trail segments from raw lon/lat samples."""
+    segments: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+
+    for index, point in enumerate(points):
+        if not current:
+            current.append(point)
+            continue
+
+        distance = _geo_distance_meters(current[-1], point)
+        if distance < TRAIL_RENDER_MIN_DISTANCE_METERS:
+            continue
+
+        if distance > TRAIL_RENDER_MAX_SEGMENT_METERS:
+            next_point = points[index + 1] if index + 1 < len(points) else None
+            if (
+                next_point is not None
+                and _geo_distance_meters(current[-1], next_point)
+                <= TRAIL_RENDER_MAX_SEGMENT_METERS
+            ):
+                continue
+            if len(current) >= 2:
+                segments.append(_prepare_geo_segment(current))
+            current = [point]
+            continue
+
+        current.append(point)
+
+    if len(current) >= 2:
+        segments.append(_prepare_geo_segment(current))
+
+    return segments
+
+
+def _prepare_geo_segment(
+    points: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Return a denoised, simplified, and visually smoothed trail segment."""
+    denoised = _denoise_geo_segment(points)
+    simplified = _simplify_geo_segment(denoised, TRAIL_RENDER_SIMPLIFY_METERS)
+    return _smooth_geo_segment(simplified)
+
+
+def _denoise_geo_segment(
+    points: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Dampen short alternating GPS wobble in the display-only trail."""
+    if len(points) < TRAIL_RENDER_DENOISE_WINDOW:
+        return points
+
+    radius = TRAIL_RENDER_DENOISE_WINDOW // 2
+    denoised = []
+    for index in range(len(points)):
+        start = max(index - radius, 0)
+        end = min(index + radius + 1, len(points))
+        weighted_lon = 0.0
+        weighted_lat = 0.0
+        total_weight = 0
+        for sample_index, sample in enumerate(points[start:end], start=start):
+            weight = radius + 1 - abs(sample_index - index)
+            weighted_lon += sample[0] * weight
+            weighted_lat += sample[1] * weight
+            total_weight += weight
+        denoised.append((weighted_lon / total_weight, weighted_lat / total_weight))
+    return denoised
+
+
+def _simplify_geo_segment(
+    points: list[tuple[float, float]], tolerance_meters: float
+) -> list[tuple[float, float]]:
+    """Remove display-only GPS jitter while preserving meaningful turns."""
+    if len(points) < 3:
+        return points
+
+    max_distance = 0.0
+    split_index = 0
+    start = points[0]
+    end = points[-1]
+    for index, point in enumerate(points[1:-1], start=1):
+        distance = _geo_perpendicular_distance_meters(point, start, end)
+        if distance > max_distance:
+            max_distance = distance
+            split_index = index
+
+    if max_distance <= tolerance_meters:
+        return [start, end]
+
+    first = _simplify_geo_segment(points[: split_index + 1], tolerance_meters)
+    second = _simplify_geo_segment(points[split_index:], tolerance_meters)
+    return [*first[:-1], *second]
+
+
+def _smooth_geo_segment(
+    points: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Round visual corners in a trail segment without changing raw storage."""
+    smoothed = points
+    for _ in range(TRAIL_RENDER_SMOOTHING_PASSES):
+        if len(smoothed) < 3:
+            break
+        next_points = [smoothed[0]]
+        for first, second in zip(smoothed, smoothed[1:], strict=False):
+            next_points.extend(
+                (
+                    _interpolate_geo_point(first, second, 0.25),
+                    _interpolate_geo_point(first, second, 0.75),
+                )
+            )
+        next_points.append(smoothed[-1])
+        smoothed = next_points
+    return smoothed
+
+
+def _interpolate_geo_point(
+    first: tuple[float, float],
+    second: tuple[float, float],
+    fraction: float,
+) -> tuple[float, float]:
+    return (
+        first[0] + (second[0] - first[0]) * fraction,
+        first[1] + (second[1] - first[1]) * fraction,
+    )
+
+
+def _geo_distance_meters(
+    first: tuple[float, float], second: tuple[float, float]
+) -> float:
+    first_lon, first_lat = first
+    second_lon, second_lat = second
+    mean_lat = (first_lat + second_lat) / 2
+    return math.hypot(
+        (second_lon - first_lon) / _meters_to_lon_degrees(1.0, mean_lat),
+        (second_lat - first_lat) / _meters_to_lat_degrees(1.0),
+    )
+
+
+def _geo_perpendicular_distance_meters(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    """Return point-to-line distance in a local metre plane."""
+    start_x, start_y = 0.0, 0.0
+    end_x, end_y = _geo_to_local_meters(end, start)
+    point_x, point_y = _geo_to_local_meters(point, start)
+    line_dx = end_x - start_x
+    line_dy = end_y - start_y
+    line_length_squared = line_dx**2 + line_dy**2
+    if line_length_squared == 0:
+        return math.hypot(point_x - start_x, point_y - start_y)
+
+    projection = max(
+        0.0,
+        min(
+            1.0,
+            ((point_x - start_x) * line_dx + (point_y - start_y) * line_dy)
+            / line_length_squared,
+        ),
+    )
+    closest_x = start_x + projection * line_dx
+    closest_y = start_y + projection * line_dy
+    return math.hypot(point_x - closest_x, point_y - closest_y)
+
+
+def _geo_to_local_meters(
+    point: tuple[float, float], origin: tuple[float, float]
+) -> tuple[float, float]:
+    lon, lat = point
+    origin_lon, origin_lat = origin
+    mean_lat = (lat + origin_lat) / 2
+    return (
+        (lon - origin_lon) / _meters_to_lon_degrees(1.0, mean_lat),
+        (lat - origin_lat) / _meters_to_lat_degrees(1.0),
+    )
 
 
 def _geometry_points(value: Any) -> list[tuple[float, float]]:

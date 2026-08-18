@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
-import math
+import time
 from copy import copy
 from typing import Any
 
@@ -22,6 +22,7 @@ from .const import (
 )
 from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
+from .geojson_utils import apply_coord, apply_geojson_offset
 from .map_renderer import (
     ESRI_WORLD_IMAGERY_TILE_PROVIDER,
     OPENSTREETMAP_TILE_PROVIDER,
@@ -46,6 +47,9 @@ async def async_setup_entry(
 class MammotionMapImage(MammotionBaseEntity, ImageEntity):
     """Static rendered mower map."""
 
+    _RENDER_CACHE_SECONDS = 300.0
+    _PLACEHOLDER_CONTENT_KEY = "placeholder"
+
     _attr_translation_key = "map"
     _attr_content_type = "image/png"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -61,6 +65,8 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         self._cached_png: bytes | None = None
         self._last_content_key: str | None = None
+        self._notified_content_key: str | None = None
+        self._last_render_time = 0.0
 
     async def async_added_to_hass(self) -> None:
         """Refresh rendered image when the mower map changes."""
@@ -70,34 +76,34 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Invalidate image when live mower telemetry changes."""
-        self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
+        content_key = self._current_content_key()
+        if content_key != self._notified_content_key:
+            self._notified_content_key = content_key
+            self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         super()._handle_coordinator_update()
 
     @callback
     def _handle_map_update(self) -> None:
         """Invalidate image when static map data changes."""
+        self._cached_png = None
+        self._notified_content_key = None
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         self.async_write_ha_state()
 
     async def async_image(self) -> bytes | None:
         """Return a rendered map image."""
-        mower = self.coordinator.manager.get_device_by_name(
-            self.coordinator.device_name
-        )
-        if mower is None:
+        payload = self._image_payload()
+        if payload is None:
+            self._notified_content_key = self._PLACEHOLDER_CONTENT_KEY
             return placeholder_png()
 
-        geojson = self._merged_geojson(mower)
-        mower_location = self._offset_location(mower.location.device)
-        mower_trail = list(getattr(self.coordinator, "location_trail", []))
-        tile_provider = self._tile_provider()
-        content_key = self._content_key(
-            geojson,
-            mower_location,
-            mower_trail,
-            tile_provider.key,
-        )
-        if self._cached_png is not None and content_key == self._last_content_key:
+        geojson, mower_location, mower_trail, tile_provider, content_key = payload
+        now = time.monotonic()
+        if (
+            self._cached_png is not None
+            and content_key == self._last_content_key
+            and now - self._last_render_time < self._RENDER_CACHE_SECONDS
+        ):
             return self._cached_png
 
         tile_cache_dir = self.hass.config.path(
@@ -114,8 +120,53 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             tile_provider,
         )
         self._last_content_key = content_key
-        self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
+        self._notified_content_key = content_key
+        self._last_render_time = now
         return self._cached_png
+
+    def _current_content_key(self) -> str:
+        """Return the key for the image Home Assistant should fetch."""
+        payload = self._image_payload()
+        if payload is None:
+            return self._PLACEHOLDER_CONTENT_KEY
+        return payload[4]
+
+    def _image_payload(
+        self,
+    ) -> (
+        tuple[
+            dict[str, Any] | None,
+            Any | None,
+            list[tuple[float, float]],
+            MapTileProvider,
+            str,
+        ]
+        | None
+    ):
+        """Return render inputs and their stable content key."""
+        mower = self.coordinator.manager.get_device_by_name(
+            self.coordinator.device_name
+        )
+        if mower is None:
+            return None
+
+        geojson = self._merged_geojson(mower)
+        offset_lat = self.coordinator.map_offset_lat
+        offset_lon = self.coordinator.map_offset_lon
+        if geojson is not None:
+            geojson = apply_geojson_offset(geojson, offset_lat, offset_lon)
+        mower_location = self._offset_location(mower.location.device)
+        mower_trail = self._offset_trail(
+            list(getattr(self.coordinator, "location_trail", []))
+        )
+        tile_provider = self._tile_provider()
+        content_key = self._content_key(
+            geojson,
+            mower_location,
+            mower_trail,
+            tile_provider.key,
+        )
+        return geojson, mower_location, mower_trail, tile_provider, content_key
 
     def _tile_provider(self) -> MapTileProvider:
         """Return the configured map background provider."""
@@ -127,20 +178,22 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             return ESRI_WORLD_IMAGERY_TILE_PROVIDER
         return OPENSTREETMAP_TILE_PROVIDER
 
-    @staticmethod
-    def _merged_geojson(mower: Any) -> dict[str, Any] | None:
+    def _merged_geojson(self, mower: Any) -> dict[str, Any] | None:
         base_geojson = MammotionMapImage._base_geojson(
             getattr(mower.map, "generated_geojson", None)
         )
+        skip_retained_trail = bool(getattr(self.coordinator, "location_trail", []))
         feature_collections = [base_geojson]
         if MammotionMapImage._is_live_report_active(mower):
             feature_collections.extend(
                 (
                     MammotionMapImage._line_geojson(
-                        getattr(mower.map, "generated_mow_progress_geojson", None)
+                        getattr(mower.map, "generated_mow_progress_geojson", None),
+                        skip_trail_features=skip_retained_trail,
                     ),
                     MammotionMapImage._line_geojson(
-                        getattr(mower.map, "generated_dynamics_line_geojson", None)
+                        getattr(mower.map, "generated_dynamics_line_geojson", None),
+                        skip_trail_features=skip_retained_trail,
                     ),
                 )
             )
@@ -192,7 +245,9 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         return {"type": "FeatureCollection", "features": features}
 
     @staticmethod
-    def _line_geojson(geojson: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _line_geojson(
+        geojson: dict[str, Any] | None, *, skip_trail_features: bool = False
+    ) -> dict[str, Any] | None:
         """Keep only line geometry from live task overlays."""
         if not isinstance(geojson, dict):
             return None
@@ -201,6 +256,9 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             for feature in geojson.get("features") or []
             if (feature.get("geometry") or {}).get("type")
             in {"LineString", "MultiLineString"}
+            and not (
+                skip_trail_features and MammotionMapImage._is_trail_feature(feature)
+            )
         ]
         if not features:
             return None
@@ -227,24 +285,58 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             "visual_safety_zone",
         }
 
+    @staticmethod
+    def _is_trail_feature(feature: dict[str, Any]) -> bool:
+        properties = feature.get("properties") or {}
+        type_name = str(
+            properties.get("type_name")
+            or properties.get("type")
+            or properties.get("Type")
+            or ""
+        ).lower()
+        return type_name == "trail"
+
     def _offset_location(self, mower_location: Any) -> Any:
         if mower_location is None:
             return None
-        location = copy(mower_location)
-        latitude = getattr(location, "latitude", None)
-        longitude = getattr(location, "longitude", None)
+        latitude = getattr(mower_location, "latitude", None)
+        longitude = getattr(mower_location, "longitude", None)
         try:
             latitude = float(latitude)
             longitude = float(longitude)
         except (TypeError, ValueError):
-            return location
-        location.latitude = latitude + self.coordinator.map_offset_lat / 111_111.0
-        cos_lat = math.cos(math.radians(location.latitude))
-        if cos_lat != 0:
-            location.longitude = longitude + self.coordinator.map_offset_lon / (
-                111_111.0 * cos_lat
+            return None
+        if latitude == 0.0 and longitude == 0.0:
+            return None
+        shifted = apply_coord(
+            [longitude, latitude],
+            latitude,
+            self.coordinator.map_offset_lat,
+            self.coordinator.map_offset_lon,
+        )
+        shifted_location = copy(mower_location)
+        shifted_location.longitude = shifted[0]
+        shifted_location.latitude = shifted[1]
+        return shifted_location
+
+    def _offset_trail(
+        self, mower_trail: list[tuple[float, float]]
+    ) -> list[tuple[float, float]]:
+        shifted_trail: list[tuple[float, float]] = []
+        for lon, lat in mower_trail:
+            try:
+                longitude = float(lon)
+                latitude = float(lat)
+            except (TypeError, ValueError):
+                continue
+            shifted = apply_coord(
+                [longitude, latitude],
+                latitude,
+                self.coordinator.map_offset_lat,
+                self.coordinator.map_offset_lon,
             )
-        return location
+            shifted_trail.append((shifted[0], shifted[1]))
+        return shifted_trail
 
     @staticmethod
     def _content_key(
