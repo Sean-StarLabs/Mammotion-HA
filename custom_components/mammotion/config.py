@@ -29,22 +29,27 @@ class MammotionConfigStore(Store):  # type: ignore[misc]
         # In-memory state of the entry's devices, keyed by device name
         self.device_data: dict[str, Any] = {}
         self._save_pending = False
+        self._legacy_migrations_pending_removal: set[str] = set()
 
     async def async_load_device_data(self) -> None:
         """Load the persisted device state into memory."""
         self.device_data = await self.async_load() or {}
+        self._legacy_migrations_pending_removal.clear()
 
     async def async_device_data(self, device_name: str) -> dict[str, Any] | None:
         """Return the stored state of a device, migrating any legacy store."""
         if (data := self.device_data.get(device_name)) is not None:
+            if device_name not in self._legacy_migrations_pending_removal:
+                await MammotionLegacyDeviceStore(self.hass, device_name).async_remove()
             return data
 
         legacy_store = MammotionLegacyDeviceStore(self.hass, device_name)
         if (legacy_data := await legacy_store.async_load()) is None:
             return None
 
-        await legacy_store.async_remove()
         self.async_update_device_data(device_name, legacy_data)
+        await self.async_flush()
+        self._legacy_migrations_pending_removal.add(device_name)
         return legacy_data
 
     @callback

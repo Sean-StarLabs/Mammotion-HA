@@ -88,7 +88,7 @@ class MammotionSpinoVacuumEntity(MammotionBaseSpinoEntity, StateVacuumEntity):
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Send the cleaner back to recharge."""
-        await self.coordinator.async_set_work_mode(SpinoWorkMode.RECHARGE.value)
+        await self.coordinator.async_set_work_mode(SpinoWorkMode.OFF.value)
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
         """Switch the cleaning work mode."""
