@@ -414,11 +414,11 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                 translation_domain=DOMAIN, translation_key="device_not_ready"
             )
 
-        explicit_route = bool(kwargs)
         if kwargs:
             entity_ids = kwargs.pop("areas", None)
             modify_plan = kwargs.pop("modify", False)
             plan_only = kwargs.pop("plan_only", False)
+            explicit_route = entity_ids is not None or bool(kwargs)
 
             # Merge onto coordinator's restored settings so UI-configured values
             # (speed, blade_height, etc.) are preserved when not explicitly provided.
@@ -440,6 +440,7 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             operational_settings = self.coordinator.operation_settings
             modify_plan = False
             plan_only = False
+            explicit_route = False
 
         # check if job in progress
         #

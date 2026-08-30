@@ -35,7 +35,7 @@ from pymammotion.data.model.device import (
 )
 from pymammotion.data.model.enums import RTKStatus, TaskAreaStatus
 from pymammotion.data.model.pool_state import SpinoSysStatus, SpinoWorkMode
-from pymammotion.utility.constant import VioState, WorkMode
+from pymammotion.utility.constant import VioState
 from pymammotion.utility.constant.device_constant import (
     AppConnectType,
     PosType,
@@ -55,6 +55,7 @@ from .coordinator import (
     MammotionReportUpdateCoordinator,
     MammotionRTKCoordinator,
     MammotionSpinoCoordinator,
+    is_active_mow_task,
 )
 from .entity import (
     MammotionBaseEntity,
@@ -81,42 +82,6 @@ def _safe_enum_name(enum_type: type, value: object) -> str:
     except TypeError:
         pass
     return f"UNKNOWN_{value}"
-
-
-def _enum_int(value: object) -> int | None:
-    """Return an enum/int value as int, or None if unknown."""
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        enum_value = getattr(value, "value", None)
-        if enum_value is None:
-            return None
-        try:
-            return int(enum_value)
-        except (TypeError, ValueError):
-            return None
-
-
-def _is_on_charger(mower_data: MowingDevice) -> bool:
-    return _enum_int(mower_data.location.position_type) == _enum_int(PosType.CHARGE_ON.value)
-
-
-def _has_active_mow_task(mower_data: MowingDevice) -> bool:
-    mode = _enum_int(mower_data.report_data.dev.sys_status)
-    if mode is None:
-        return False
-    if mode == _enum_int(WorkMode.MODE_RETURNING):
-        return mower_data.report_data.work.bp_info != 0
-    if _is_on_charger(mower_data) and mode in {
-        _enum_int(WorkMode.MODE_READY),
-        _enum_int(WorkMode.MODE_PAUSE),
-    }:
-        return False
-    return mode in {
-        _enum_int(WorkMode.MODE_WORKING),
-        _enum_int(WorkMode.MODE_PAUSE),
-        _enum_int(WorkMode.MODE_CHARGING_PAUSE),
-    }
 
 
 class MowerDataFormatter:
@@ -339,7 +304,7 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         value_fn=lambda mower_data: (
             mower_data.report_data.work.area & 65535
-            if _has_active_mow_task(mower_data)
+            if is_active_mow_task(mower_data)
             else None
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -359,7 +324,7 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         value_fn=lambda mower_data: (
             mower_data.report_data.work.area >> 16
-            if _has_active_mow_task(mower_data)
+            if is_active_mow_task(mower_data)
             else None
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -371,7 +336,7 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.MINUTES,
         value_fn=lambda mower_data: (
             mower_data.report_data.work.progress & 65535
-            if _has_active_mow_task(mower_data)
+            if is_active_mow_task(mower_data)
             else None
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -384,7 +349,7 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         value_fn=lambda mower_data: (
             (mower_data.report_data.work.progress & 65535)
             - (mower_data.report_data.work.progress >> 16)
-            if _has_active_mow_task(mower_data)
+            if is_active_mow_task(mower_data)
             else None
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -396,7 +361,7 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.MINUTES,
         value_fn=lambda mower_data: (
             mower_data.report_data.work.progress >> 16
-            if _has_active_mow_task(mower_data)
+            if is_active_mow_task(mower_data)
             else None
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1100,7 +1065,7 @@ def async_add_task_area_entities(
 
     current_ids: set[int] = (
         set(coordinator.data.events.work_tasks_event.ids)
-        if _has_active_mow_task(coordinator.data)
+        if is_active_mow_task(coordinator.data)
         else set()
     )
 

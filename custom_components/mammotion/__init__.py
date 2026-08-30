@@ -603,8 +603,7 @@ async def _async_setup_map_best_effort(
     async def _run_map_setup() -> None:
         try:
             async with asyncio.timeout(20):
-                await map_coordinator._async_setup()
-            await map_coordinator.async_request_refresh()
+                await map_coordinator.async_config_entry_first_refresh()
         except asyncio.CancelledError:
             raise
         except Exception as ex:

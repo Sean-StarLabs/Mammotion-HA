@@ -79,6 +79,7 @@ from pymammotion.transport.base import (
 )
 from pymammotion.transport.ble import BLETransport
 from pymammotion.utility.constant import MOWING_ACTIVE_MODES, WorkMode
+from pymammotion.utility.constant.device_constant import PosType
 from pymammotion.utility.device_type import DeviceType
 from pymammotion.utility.plan_id import make_copy_name, new_mower_plan_id
 from pymammotion.utility.svg import chunk_svg_messages
@@ -119,6 +120,33 @@ LIVE_REPORT_MODES = {
     int(WorkMode.MODE_RETURNING),
     int(WorkMode.MODE_CHARGING_PAUSE),
 }
+
+
+def is_active_mow_task(mower_data: MowingDevice) -> bool:
+    """Return whether reported state belongs to an unfinished mowing task."""
+    try:
+        mode = int(mower_data.report_data.dev.sys_status)
+    except (TypeError, ValueError):
+        return False
+    if mode == int(WorkMode.MODE_RETURNING):
+        return mower_data.report_data.work.bp_info != 0
+    try:
+        on_charger = int(mower_data.location.position_type) == int(
+            PosType.CHARGE_ON.value
+        )
+    except (TypeError, ValueError):
+        on_charger = False
+    if (
+        on_charger
+        and mode in {int(WorkMode.MODE_READY), int(WorkMode.MODE_PAUSE)}
+    ):
+        return False
+    return mode in {
+        int(WorkMode.MODE_WORKING),
+        int(WorkMode.MODE_PAUSE),
+        int(WorkMode.MODE_CHARGING_PAUSE),
+    }
+
 
 # Possible states for ``MammotionReportUpdateCoordinator.map_sync_status`` and
 # the ``map_sync_status`` diagnostic ENUM sensor that surfaces it.
@@ -1474,14 +1502,11 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         if device is None:
             return
 
-        try:
-            mode = int(cast(MowingDevice, device).report_data.dev.sys_status)
-        except (TypeError, ValueError):
-            return
-        if mode not in LIVE_REPORT_MODES:
+        mower_data = cast(MowingDevice, device)
+        if not is_active_mow_task(mower_data):
             return
 
-        work = cast(MowingDevice, device).work
+        work = mower_data.work
         if work is None:
             return
 

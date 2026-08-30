@@ -11,8 +11,6 @@ from typing import Any
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
-from pymammotion.utility.constant import WorkMode
-from pymammotion.utility.constant.device_constant import PosType
 
 from . import MammotionConfigEntry
 from .const import (
@@ -20,7 +18,7 @@ from .const import (
     MAP_BASE_LAYER_OPENSTREETMAP,
     MAP_BASE_LAYER_SATELLITE,
 )
-from .coordinator import MammotionReportUpdateCoordinator
+from .coordinator import MammotionReportUpdateCoordinator, is_active_mow_task
 from .entity import MammotionBaseEntity
 from .geojson_utils import apply_coord, apply_geojson_offset
 from .map_renderer import (
@@ -140,7 +138,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
 
         trail = self._native_trail_coordinates(mower)
         last_trail_point = trail[-1] if trail else None
-        active = self._is_live_report_active(mower)
+        active = is_active_mow_task(mower)
         offset_key = (
             round(float(self.coordinator.map_offset_lat), 7),
             round(float(self.coordinator.map_offset_lon), 7),
@@ -213,7 +211,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             getattr(mower.map, "generated_geojson", None)
         )
         feature_collections = [base_geojson]
-        active = MammotionMapImage._is_live_report_active(mower)
+        active = is_active_mow_task(mower)
         if active and MammotionMapImage._has_current_native_route(mower):
             feature_collections.append(
                 MammotionMapImage._line_geojson(
@@ -260,28 +258,6 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
                 if isinstance(point, (list, tuple)) and len(point) >= 2
             ]
         return []
-
-    @staticmethod
-    def _is_live_report_active(mower: Any) -> bool:
-        try:
-            mode = int(mower.report_data.dev.sys_status or 0)
-        except (TypeError, ValueError):
-            return False
-        try:
-            position_type = int(mower.location.position_type or 0)
-        except (TypeError, ValueError):
-            position_type = 0
-        if position_type == int(PosType.CHARGE_ON.value) and mode in {
-            int(WorkMode.MODE_READY),
-            int(WorkMode.MODE_PAUSE),
-        }:
-            return False
-        return mode in {
-            int(WorkMode.MODE_WORKING),
-            int(WorkMode.MODE_RETURNING),
-            int(WorkMode.MODE_PAUSE),
-            int(WorkMode.MODE_CHARGING_PAUSE),
-        }
 
     @staticmethod
     def _has_current_native_route(mower: Any) -> bool:
