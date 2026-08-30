@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Callable
 from copy import copy
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time
 from time import monotonic
 from typing import Any, cast
 
@@ -297,7 +298,7 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             action=1,
             expected_modes={WorkMode.MODE_WORKING},
             trans_key=trans_key,
-            timeout=90,
+            timeout=120,
         )
 
     async def _async_task_control(
@@ -308,35 +309,47 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         expected_modes: set[WorkMode],
         trans_key: str,
         timeout: float = 15.0,
+        success_predicate: Callable[[], bool] | None = None,
     ) -> None:
         """Send one task command and verify its ACK and reported final state."""
         await self.coordinator.async_start_report_stream(
             duration_ms=int(timeout * 1000)
         )
-        report_token = self.coordinator.report_data_token
-        before_send = None
-        if command in {"start_job", "resume_execute_task"}:
-            # Once the outbound call is entered, the mower may begin later even if
-            # its ACK or current report still says READY. Keep the transaction
-            # accountable until fresh telemetry arrives; a queued safety action
-            # then runs.
+        report_token: float | None = None
+        previous_error_key: tuple[int, datetime | None] | None = None
+        command_started_at: datetime | None = None
 
-            def _cancel_or_mark_dispatched() -> None:
-                if self._start_dispatched:
-                    return
+        def _prepare_dispatch() -> None:
+            nonlocal command_started_at, previous_error_key, report_token
+            if command_started_at is not None:
+                return
+            if command in {"start_job", "resume_execute_task"}:
+                # Once the outbound call is entered, the mower may begin later even
+                # if its ACK or current report still says READY. Keep the transaction
+                # accountable until fresh telemetry arrives; a queued safety action
+                # then runs.
                 if (
                     self._active_start_cancel is not None
                     and self._active_start_cancel.is_set()
                 ):
                     raise _CommandPreempted
                 self._start_dispatched = True
+            previous_error = get_mammotion_error_details(
+                self.coordinator.data, self.hass.config.language
+            )
+            previous_error_key = (
+                (previous_error.code, previous_error.occurred_at)
+                if previous_error is not None
+                else None
+            )
+            report_token = self.coordinator.report_data_token
+            command_started_at = datetime.now(UTC).replace(microsecond=0)
 
-            before_send = _cancel_or_mark_dispatched
         response = await self.coordinator.async_send_and_wait(
             command,
             "todev_taskctrl_ack",
             retry_on_timeout=False,
-            before_send=before_send,
+            before_send=_prepare_dispatch,
         )
         deadline = monotonic() + timeout
         ack = None
@@ -351,12 +364,17 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key=trans_key
             )
+        if report_token is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key=trans_key
+            )
 
         while True:
             latest_token = self.coordinator.report_data_token
             if (
                 latest_token != report_token
                 and self.rpt_dev_status.sys_status in expected_modes
+                and (success_predicate is None or success_predicate())
             ):
                 return
             remaining = deadline - monotonic()
@@ -372,10 +390,15 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         error = get_mammotion_error_details(
             self.coordinator.data, self.hass.config.language
         )
+        error_key = (
+            (error.code, error.occurred_at) if error is not None else None
+        )
         if (
             error is not None
             and error.occurred_at is not None
-            and error.occurred_at >= datetime.now(UTC) - timedelta(minutes=10)
+            and command_started_at is not None
+            and error_key != previous_error_key
+            and error.occurred_at >= command_started_at
         ):
             classification = classify_mammotion_error(
                 self.coordinator.data, error, command_rejected=True
@@ -390,8 +413,10 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         cancel_event = asyncio.Event()
         self._start_cancel_events.add(cancel_event)
         try:
-            await self.coordinator.async_interrupt_sagas()
             async with self._command_lock:
+                if cancel_event.is_set():
+                    raise _CommandPreempted
+                await self.coordinator.async_interrupt_sagas()
                 self._active_start_cancel = cancel_event
                 self._start_dispatched = False
                 await self._async_wait_unless_preempted(
@@ -680,6 +705,8 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             WorkMode.MODE_CHARGING_PAUSE,
             WorkMode.MODE_WORKING,
             WorkMode.MODE_RETURNING,
+        ) or (
+            mode == WorkMode.MODE_READY and self.report_data.work.bp_info != 0
         ):
             try:
                 if mode not in (
@@ -720,6 +747,7 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                         expected_modes={WorkMode.MODE_READY},
                         trans_key=trans_key,
                         timeout=30,
+                        success_predicate=lambda: self.report_data.work.bp_info == 0,
                     )
 
             except COMMAND_EXCEPTIONS as exc:

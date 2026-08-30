@@ -94,6 +94,7 @@ from .models import (
     MammotionSpinoData,
 )
 from .services import async_setup_services
+from .yuka import is_yuka_2
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -130,17 +131,21 @@ _LUBA_SUB_MESSAGES = (
 _ORIGINAL_MOWER_STATE_REDUCER_APPLY = MowerStateReducer.apply
 _ORIGINAL_MOWER_STATE_REDUCER_UPDATE_NAV = MowerStateReducer._update_nav_data
 _ORIGINAL_START_MOW_PATH_SAGA = MammotionClient.start_mow_path_saga
+_ORIGINAL_START_DYNAMICS_LINE_LOOP = DeviceHandle._start_dynamics_line_loop
 
 
-def _disable_automatic_dynamics_line_loop(handle: DeviceHandle) -> None:
-    """Keep native-path probes explicit until support is confirmed."""
-    LOGGER.debug(
-        "Skipping automatic dynamics-line polling for %s; use an explicit fetch",
-        handle.device_name,
-    )
+def _start_verified_dynamics_line_loop(handle: DeviceHandle) -> None:
+    """Skip the unsupported Yuka ML probe without affecting other models."""
+    if is_yuka_2(handle.device_name):
+        LOGGER.debug(
+            "Skipping unsupported dynamics-line polling for %s",
+            handle.device_name,
+        )
+        return
+    _ORIGINAL_START_DYNAMICS_LINE_LOOP(handle)
 
 
-DeviceHandle._start_dynamics_line_loop = _disable_automatic_dynamics_line_loop
+DeviceHandle._start_dynamics_line_loop = _start_verified_dynamics_line_loop
 
 
 def _ignore_task_ack_state(

@@ -26,6 +26,7 @@ VIRTUAL_STROKE = (220, 40, 40, 230)
 MOWER_FILL = (245, 247, 248, 255)
 MOWER_STROKE = (82, 90, 98, 220)
 OSM_MAX_ZOOM = 19
+OSM_MIN_ZOOM = 12
 OSM_TILE_SIZE = 256
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 OSM_USER_AGENT = "HomeAssistant-Mammotion-Map/1.0"
@@ -144,7 +145,7 @@ def render_map_png(
 
     bounds = _geo_bounds(points).expanded()
     center_lon, center_lat = bounds.center
-    zoom = OSM_MAX_ZOOM
+    zoom = _tile_zoom_for_bounds(bounds)
     min_pixel = _lonlat_to_pixel(bounds.min_lon, bounds.max_lat, zoom)
     max_pixel = _lonlat_to_pixel(bounds.max_lon, bounds.min_lat, zoom)
     pixel_width = max(max_pixel[0] - min_pixel[0], 1.0)
@@ -190,6 +191,21 @@ def render_map_png(
     _draw_attribution(draw, tile_provider.attribution)
 
     return _encode(image)
+
+
+def _tile_zoom_for_bounds(bounds: GeoBounds) -> int:
+    """Choose the highest tile zoom whose bounds fit the output canvas."""
+    target_width = CANVAS_SIZE[0] * 0.90
+    target_height = CANVAS_SIZE[1] * 0.90
+    for zoom in range(OSM_MAX_ZOOM, OSM_MIN_ZOOM - 1, -1):
+        min_pixel = _lonlat_to_pixel(bounds.min_lon, bounds.max_lat, zoom)
+        max_pixel = _lonlat_to_pixel(bounds.max_lon, bounds.min_lat, zoom)
+        if (
+            max_pixel[0] - min_pixel[0] <= target_width
+            and max_pixel[1] - min_pixel[1] <= target_height
+        ):
+            return zoom
+    return OSM_MIN_ZOOM
 
 
 def _render_osm_source(

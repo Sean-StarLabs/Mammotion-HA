@@ -50,13 +50,14 @@ from pymammotion.data.model.device import (
     RTKBaseStationDevice,
 )
 from pymammotion.data.model.device_config import OperationSettings, create_path_order
-from pymammotion.data.model.hash_list import Plan, SvgMessage
+from pymammotion.data.model.hash_list import Plan, SvgMessage, effective_path_hash
 from pymammotion.data.model.pool_state import PoolPlan, SpinoToggle
 from pymammotion.data.model.report_info import Maintain, NetUsedType
 from pymammotion.data.model.work import CurrentTaskSettings
 from pymammotion.data.mqtt.event import DeviceNotificationEventParams, ThingEventMessage
 from pymammotion.data.mqtt.properties import ThingPropertiesMessage
 from pymammotion.data.mqtt.status import StatusType, ThingStatusMessage
+from pymammotion.device.handle import DeviceHandle
 from pymammotion.http.model.camera_stream import (
     StreamSubscriptionResponse,
 )
@@ -89,9 +90,11 @@ from .agora_api import SERVICE_IDS, AgoraAPIClient, AgoraResponse
 from .config import MammotionConfigStore, async_get_store
 from .const import (
     CONF_ACCOUNTNAME,
+    CONF_BLE_DEVICES,
     CONF_CONNECT_DATA,
     CONF_HAS_CLOUD_ACCOUNT,
     CONF_MAMMOTION_DATA,
+    CONF_USE_WIFI,
     DOMAIN,
     EXPIRED_CREDENTIAL_EXCEPTIONS,
     LOGGER,
@@ -112,6 +115,7 @@ MAP_INTERVAL = timedelta(minutes=60)
 RTK_INTERVAL = timedelta(hours=5)
 SPINO_INTERVAL = timedelta(weeks=1)
 DYNAMICS_LINE_BACKOFF_SECONDS = 300
+AREA_NAME_BACKOFF_SECONDS = 60
 SETUP_READ_TIMEOUT_SECONDS = 15
 DYNAMICS_LINE_FETCH_ENABLED = False
 LIVE_REPORT_MODES = {
@@ -128,8 +132,11 @@ def is_active_mow_task(mower_data: MowingDevice) -> bool:
         mode = int(mower_data.report_data.dev.sys_status)
     except (TypeError, ValueError):
         return False
-    if mode == int(WorkMode.MODE_RETURNING):
-        return mower_data.report_data.work.bp_info != 0
+    if mode in {int(WorkMode.MODE_RETURNING), int(WorkMode.MODE_READY)}:
+        try:
+            return int(mower_data.report_data.work.bp_info) != 0
+        except (TypeError, ValueError):
+            return False
     try:
         on_charger = int(mower_data.location.position_type) == int(
             PosType.CHARGE_ON.value
@@ -146,6 +153,28 @@ def is_active_mow_task(mower_data: MowingDevice) -> bool:
         int(WorkMode.MODE_PAUSE),
         int(WorkMode.MODE_CHARGING_PAUSE),
     }
+
+
+def has_current_native_route(mower_data: MowingDevice) -> bool:
+    """Return whether cached path geometry matches current task telemetry."""
+    try:
+        work = mower_data.report_data.work
+        path_hash = effective_path_hash(int(work.path_hash), int(work.ub_path_hash))
+        return path_hash != 0 and mower_data.map.has_mow_path_for_hash(path_hash)
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def has_current_native_dynamics(mower_data: MowingDevice) -> bool:
+    """Return whether dynamics geometry was fetched for the current task."""
+    try:
+        work = mower_data.report_data.work
+        path_hash = effective_path_hash(int(work.path_hash), int(work.ub_path_hash))
+        return path_hash != 0 and path_hash == int(
+            mower_data.map.dynamics_line_path_hash
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 # Possible states for ``MammotionReportUpdateCoordinator.map_sync_status`` and
@@ -192,6 +221,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         self.manager: MammotionClient = mammotion
         self._operation_settings = OperationSettings()
         self._operation_settings_from_device = False
+        self._next_area_name_fetch_at = 0.0
         self.update_failures = 0
         self._stream_data: Response[StreamSubscriptionResponse] | None = (
             None  # Stream data [Agora]
@@ -210,7 +240,9 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         self.map_offset_lat: float = 0.0
         self.map_offset_lon: float = 0.0
         self._bluetooth_enabled: bool = True
-        self._cloud_enabled: bool = True
+        self._cloud_enabled = bool(
+            config_entry.data.get(CONF_USE_WIFI, self.has_cloud_account)
+        )
         self._store: MammotionConfigStore = async_get_store(hass, config_entry)
 
         mower_device = self.manager.get_device_by_name(self.device_name)
@@ -410,18 +442,137 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
             await self._async_ensure_ble_client()
 
     async def async_set_cloud_enabled(self, enabled: bool) -> None:
-        """Enable or disable Cloud transport."""
-        self._cloud_enabled = enabled
-        handle = self.manager.mower(self.device_name)
+        """Enable or disable Cloud transport for every device in this entry."""
+        if enabled and not self.has_cloud_account:
+            raise HomeAssistantError(
+                "Cloud cannot be enabled without a configured cloud account"
+            )
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        if not enabled:
+            if any(
+                getattr(runtime_data, collection, [])
+                for collection in ("RTK", "spino")
+            ):
+                raise HomeAssistantError(
+                    "Cloud cannot be disabled while companion devices are configured"
+                )
+            ble_devices = self.config_entry.data.get(CONF_BLE_DEVICES) or {}
+            mower_names = {
+                mower.device.device_name
+                for mower in getattr(runtime_data, "mowers", [])
+            } or {self.device_name}
+            if not mower_names.issubset(ble_devices):
+                raise HomeAssistantError(
+                    "Cloud cannot be disabled until every mower has a configured "
+                    "Bluetooth fallback"
+                )
+        lock = getattr(runtime_data, "cloud_policy_lock", None)
+        if lock is None:
+            await self._async_apply_cloud_policy(enabled, runtime_data)
+            return
+        async with lock:
+            await self._async_apply_cloud_policy(enabled, runtime_data)
+
+    async def _async_apply_cloud_policy(
+        self, enabled: bool, runtime_data: Any
+    ) -> None:
+        """Persist and apply an entry-wide cloud policy while holding its lock."""
+        if (
+            CONF_USE_WIFI not in self.config_entry.data
+            or bool(self.config_entry.data[CONF_USE_WIFI]) != enabled
+        ):
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data={**self.config_entry.data, CONF_USE_WIFI: enabled},
+            )
+
+        coordinators = [
+            mower.reporting_coordinator
+            for mower in getattr(runtime_data, "mowers", [])
+        ]
+        coordinators.extend(
+            device.coordinator
+            for collection in ("RTK", "spino")
+            for device in getattr(runtime_data, collection, [])
+        )
+        if self not in coordinators:
+            coordinators.append(self)
+        for coordinator in coordinators:
+            coordinator._cloud_enabled = enabled
+            coordinator.async_update_listeners()
+
+        if enabled and self.has_cloud_account and self.manager.token_manager is None:
+            self._schedule_cloud_reload(runtime_data)
+            return
+
+        results = await asyncio.gather(
+            *(
+                coordinator._async_apply_cloud_transport(enabled)
+                for coordinator in coordinators
+            ),
+            return_exceptions=True,
+        )
+        for coordinator, result in zip(coordinators, results, strict=True):
+            if isinstance(result, Exception):
+                LOGGER.warning(
+                    "Could not apply cloud=%s to %s: %s",
+                    enabled,
+                    coordinator.device_name,
+                    result,
+                )
+
+    def _schedule_cloud_reload(self, runtime_data: Any) -> None:
+        """Reload once so a BLE-only client can authenticate cloud transports."""
+        if runtime_data is not None and runtime_data.cloud_reload_pending:
+            return
+        if runtime_data is not None:
+            runtime_data.cloud_reload_pending = True
+
+        async def _reload(_: datetime.datetime) -> None:
+            try:
+                await self.hass.config_entries.async_reload(
+                    self.config_entry.entry_id
+                )
+            finally:
+                current_runtime = getattr(self.config_entry, "runtime_data", None)
+                if current_runtime is runtime_data and runtime_data is not None:
+                    runtime_data.cloud_reload_pending = False
+
+        async_call_later(self.hass, 0, _reload)
+
+    async def _async_apply_cloud_transport(self, enabled: bool) -> None:
+        """Apply the entry policy to this device's cloud transports."""
+        handle = self._cloud_transport_handle()
         if handle is None:
             return
         if enabled:
-            for t_type in (TransportType.CLOUD_ALIYUN, TransportType.CLOUD_MAMMOTION):
-                await handle.connect_transport(t_type)
+            for transport_type in (
+                TransportType.CLOUD_ALIYUN,
+                TransportType.CLOUD_MAMMOTION,
+            ):
+                await handle.connect_transport(transport_type)
             await handle.restart_keep_alive()
-        else:
-            for t_type in (TransportType.CLOUD_ALIYUN, TransportType.CLOUD_MAMMOTION):
-                await handle.disconnect_transport(t_type)
+            return
+        for transport_type in (
+            TransportType.CLOUD_ALIYUN,
+            TransportType.CLOUD_MAMMOTION,
+        ):
+            await handle.disconnect_transport(transport_type)
+
+    def _cloud_transport_handle(self) -> DeviceHandle | None:
+        """Return this coordinator's device handle."""
+        return self.manager.mower(self.device_name)
+
+    @property
+    def route_task_settings_available(self) -> bool:
+        """Return whether task settings can be edited without being discarded."""
+        mower_data = cast(MowingDevice, self.data)
+        if not is_active_mow_task(mower_data):
+            return True
+        return (
+            mower_data.report_data.dev.sys_status == WorkMode.MODE_WORKING
+            and mower_data.report_data.dev.charge_state == 0
+        )
 
     async def async_refresh_login(self, exc: Exception | None = None) -> None:
         """Refresh whichever credentials the failure actually implicates.
@@ -521,12 +672,22 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
             except CommandTimeoutError:
                 if not preferred_ble or not retry_on_timeout:
                     raise
+                handle = self.manager.mower(self.device_name)
+                mqtt_connected = handle is not None and any(
+                    handle.is_transport_connected(transport_type)
+                    for transport_type in (
+                        TransportType.CLOUD_ALIYUN,
+                        TransportType.CLOUD_MAMMOTION,
+                    )
+                )
+                if not self._cloud_enabled or not mqtt_connected:
+                    raise
                 LOGGER.warning(
                     "Command %s for %s timed out over preferred BLE; retrying via MQTT",
                     command,
                     self.device_name,
                 )
-                if handle := self.manager.mower(self.device_name):
+                if handle is not None:
                     with contextlib.suppress(TransportError):
                         await handle.disconnect_transport(TransportType.BLE)
                 response = await _send(False)
@@ -1129,6 +1290,10 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
 
     async def async_get_area_list(self) -> None:
         """Fetch area names and wait for the toapp_all_hash_name response."""
+        now = time.monotonic()
+        if now < self._next_area_name_fetch_at:
+            return
+        self._next_area_name_fetch_at = now + AREA_NAME_BACKOFF_SECONDS
         await self.async_send_and_wait(
             "get_area_name_list",
             "toapp_all_hash_name",
@@ -1345,17 +1510,19 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
 
         if work := cast(MowingDevice, self.data).work:
             operation_settings.areas = list(dict.fromkeys(work.zone_hashs))
-            operation_settings.mowing_laps = work.edge_mode
-            operation_settings.job_mode = work.job_mode
             operation_settings.job_id = work.job_id
             operation_settings.job_version = work.job_ver
 
         route_information = self.generate_route_information(operation_settings)
 
-        result = await self.async_send_command(
-            "modify_route_information", generate_route_information=route_information
+        response = await self.async_send_and_wait(
+            "modify_route_information",
+            "bidire_reqconver_path",
+            generate_route_information=route_information,
         )
-        return result
+        if response is None:
+            return False
+        return self.sync_operation_settings_from_route_response(response)
 
     async def start_task(self, plan_id: str) -> None:
         """Start task."""
@@ -1544,10 +1711,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
     async def async_modify_plan_if_mowing(self) -> None:
         """Re-plan the current mow route if the device is actively mowing."""
         _mdata = cast(MowingDevice, self.data)
-        if (
-            _mdata.report_data.dev.sys_status != WorkMode.MODE_WORKING
-            or _mdata.report_data.dev.charge_state != 0
-        ):
+        if not self.route_task_settings_available or not is_active_mow_task(_mdata):
             return
         if _mdata.work is None:
             return
@@ -2612,6 +2776,10 @@ class MammotionRTKCoordinator(MammotionBaseUpdateCoordinator[RTKBaseStationDevic
             unique_name=unique_name,
         )
 
+    def _cloud_transport_handle(self) -> DeviceHandle | None:
+        """Return the RTK device handle."""
+        return self.manager.rtk_device(self.device_name)
+
     async def get_coordinator_data(
         self, device: RTKBaseStationDevice
     ) -> RTKBaseStationDevice:
@@ -2738,6 +2906,10 @@ class MammotionSpinoCoordinator(MammotionBaseUpdateCoordinator[PoolCleanerDevice
             update_interval=SPINO_INTERVAL,
             unique_name=unique_name,
         )
+
+    def _cloud_transport_handle(self) -> DeviceHandle | None:
+        """Return the pool-cleaner device handle."""
+        return self.manager.pool_cleaner_device(self.device_name)
 
     async def _async_setup(self) -> None:
         """Subscribe to device events, then read the initial toggle states once.

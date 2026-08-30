@@ -16,7 +16,13 @@ from pymammotion.data.model.pool_state import PoolPlan
 from pymammotion.utility.device_type import DeviceType
 
 from .const import DOMAIN, LOGGER
-from .coordinator import MammotionReportUpdateCoordinator, MammotionSpinoCoordinator
+from .coordinator import (
+    MammotionReportUpdateCoordinator,
+    MammotionSpinoCoordinator,
+    has_current_native_dynamics,
+    has_current_native_route,
+    is_active_mow_task,
+)
 
 if TYPE_CHECKING:
     from . import MammotionConfigEntry
@@ -439,15 +445,24 @@ def async_setup_services(hass: HomeAssistant) -> None:  # noqa: C901
         coordinator = mower.reporting_coordinator
         device_type = DeviceType.value_of_str(coordinator.device_name)
         firmware = coordinator.data.device_firmwares.main_controller
-        dynamics_line = coordinator.data.map.generated_dynamics_line_geojson
-        if (
-            device_type.is_support_dynamics_line(firmware)
+        mower_data = coordinator.data
+        mow_progress = mower_data.map.generated_mow_progress_geojson
+        dynamics_line = mower_data.map.generated_dynamics_line_geojson
+        current_route = has_current_native_route(mower_data)
+        if is_active_mow_task(mower_data) and current_route and (
+            isinstance(mow_progress, dict) and mow_progress.get("features")
+        ):
+            geojson = mow_progress
+        elif (
+            is_active_mow_task(mower_data)
+            and has_current_native_dynamics(mower_data)
+            and device_type.is_support_dynamics_line(firmware)
             and isinstance(dynamics_line, dict)
             and dynamics_line.get("features")
         ):
             geojson = dynamics_line
         else:
-            geojson = coordinator.data.map.generated_mow_progress_geojson
+            geojson = {}
         return apply_geojson_offset(
             geojson, coordinator.map_offset_lat, coordinator.map_offset_lon
         )

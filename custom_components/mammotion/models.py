@@ -1,6 +1,7 @@
 """Data models for the Mammotion integration."""
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 
 from pymammotion.aliyun.model.dev_by_account_response import Device
 from pymammotion.client import MammotionClient
@@ -60,3 +61,5 @@ class MammotionDevices:
     mowers: list[MammotionMowerData]
     RTK: list[MammotionRTKData]
     spino: list[MammotionSpinoData]
+    cloud_policy_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    cloud_reload_pending: bool = False

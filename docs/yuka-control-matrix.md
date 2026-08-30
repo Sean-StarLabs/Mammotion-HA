@@ -34,7 +34,7 @@ acknowledgement is not evidence that the mower changed state.
 | Returning | Dock | No command | Returning |
 | Docked | Dock | No command | Docked |
 
-Start allows 90 seconds and resume allows 60 seconds for reported `Working`;
+Start allows 120 seconds and resume allows 60 seconds for reported `Working`;
 pause allows 20 seconds; stop and return-to-dock transitions allow 30 seconds.
 A matching task acknowledgement with a non-zero result fails immediately. A
 missing acknowledgement may still succeed only when fresh telemetry reports the
@@ -56,7 +56,7 @@ Tested on 2026-08-30 with BLE connected:
 
 | Scenario | Observed result |
 | --- | --- |
-| Back garden start | Working in 0.8 to 16.3 seconds across warm and post-restart runs |
+| Back garden start | Working in 0.8 to 96 seconds across warm and cold post-restart runs |
 | Pause | Paused in 1.1 seconds |
 | Resume | Working in 2.1 seconds |
 | Stop | Pause and cancel completed in 5.9 seconds |
@@ -65,6 +65,12 @@ Tested on 2026-08-30 with BLE connected:
 | Restart while working | Fresh state recovered; pause, cancel, and dock remained usable |
 | Start preempted before dispatch | Start and dock both returned successfully; mower remained docked for 105 seconds |
 | Start followed by dock | Working observed after 11 seconds; returning after dock request; physically docked after 42 seconds |
+| Next-task route settings | Mow order and lap counts retained while docked and became unavailable during an active task |
+| Runtime route setting | Obstacle detection changed `off` to `standard` and back while mowing; each device-confirmed value remained stable |
+
+The standard Home Assistant lawn-mower entity exposes start, pause, and dock for
+this device. Explicit task cancellation uses the integration's `cancel_job`
+service; Home Assistant's lawn-mower entity model has no stop feature.
 
 ## Native route display
 

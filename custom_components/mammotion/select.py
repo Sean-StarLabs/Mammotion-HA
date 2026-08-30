@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
-from pymammotion.data.model.device import PoolCleanerDevice
+from pymammotion.data.model.device import MowingDevice, PoolCleanerDevice
 from pymammotion.data.model.mowing_modes import (
     BorderPatrolMode,
     CuttingMode,
@@ -31,7 +31,11 @@ from pymammotion.utility.device_type import DeviceType
 
 from . import MammotionConfigEntry, MammotionReportUpdateCoordinator
 from .const import DOMAIN
-from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
+from .coordinator import (
+    MammotionBaseUpdateCoordinator,
+    MammotionSpinoCoordinator,
+    is_active_mow_task,
+)
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
 from .yuka import (
     BLADE_SPEED_OPTIONS,
@@ -275,6 +279,16 @@ def _get_yuka_lap(
     )
 
 
+def _next_task_setting_available(
+    coordinator: MammotionBaseUpdateCoordinator,
+) -> bool:
+    """Return whether a route setting can be changed for the next task."""
+    mower_data = coordinator.data
+    return not isinstance(mower_data, MowingDevice) or not is_active_mow_task(
+        mower_data
+    )
+
+
 def _get_yuka_obstacle_detection(
     coordinator: MammotionBaseUpdateCoordinator,
 ) -> str:
@@ -364,6 +378,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         device_task_setting=True,
         get_fn=_get_yuka_mow_order,
         set_fn=_set_yuka_mow_order,
+        available_fn=_next_task_setting_available,
     ),
     MammotionConfigSelectEntityDescription(
         key="mowing_laps",
@@ -374,6 +389,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "mowing_laps", LAP_VALUES[value]
         ),
+        available_fn=_next_task_setting_available,
     ),
     MammotionConfigSelectEntityDescription(
         key="obstacle_laps",
@@ -384,6 +400,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "obstacle_laps", LAP_VALUES[value]
         ),
+        available_fn=_next_task_setting_available,
     ),
     MammotionConfigSelectEntityDescription(
         key="bypass_mode",
@@ -711,10 +728,15 @@ class MammotionConfigSelectEntity(MammotionBaseEntity, SelectEntity, RestoreEnti
     @property
     def available(self) -> bool:
         """Return True when this select applies to the current Yuka settings."""
-        if self.entity_description.available_fn is None:
-            return super().available
-        return super().available and self.entity_description.available_fn(
-            self.coordinator
+        if not super().available:
+            return False
+        if (
+            self.entity_description.device_task_setting
+            and not self.coordinator.route_task_settings_available
+        ):
+            return False
+        return self.entity_description.available_fn is None or (
+            self.entity_description.available_fn(self.coordinator)
         )
 
 

@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pymammotion.data.model.device import PoolCleanerDevice
+from pymammotion.data.model.device import MowingDevice, PoolCleanerDevice
 from pymammotion.data.model.device_limits import DeviceLimits
 from pymammotion.data.model.mowing_modes import PathAngleSetting
 from pymammotion.utility.device_config import DeviceConfig
@@ -30,7 +30,11 @@ from pymammotion.utility.device_type import DeviceType
 
 from . import MammotionConfigEntry
 from .const import DOMAIN
-from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
+from .coordinator import (
+    MammotionBaseUpdateCoordinator,
+    MammotionSpinoCoordinator,
+    is_active_mow_task,
+)
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
 from .yuka import (
     GRID_PATTERN_VALUE,
@@ -75,6 +79,16 @@ SPINO_NUMBER_ENTITIES: tuple[MammotionSpinoNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: coordinator.async_set_floor_speed(value),
     ),
 )
+
+
+def _next_task_setting_available(
+    coordinator: MammotionBaseUpdateCoordinator[Any],
+) -> bool:
+    """Return whether a route setting can be changed for the next task."""
+    mower_data = coordinator.data
+    return not isinstance(mower_data, MowingDevice) or not is_active_mow_task(
+        mower_data
+    )
 
 
 MAP_OFFSET_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
@@ -212,10 +226,12 @@ YUKA_SWEEPER_NUMBER_ENTITIES: tuple[
         native_step=1,
         mode=NumberMode.SLIDER,
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
+        device_task_setting=True,
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "collect_grass_frequency", value
         ),
         get_fn=lambda coordinator: coordinator.operation_settings.collect_grass_frequency,
+        available_fn=_next_task_setting_available,
     ),
 )
 
@@ -298,7 +314,7 @@ async def async_setup_entry(
             mower.device.device_name
         ) and not is_yuka_mini_or_ml(mower.device.device_name)
         working_entities = (
-            (*YUKA_NUMBER_ENTITIES, *YUKA_SWEEPER_NUMBER_ENTITIES)
+            (*NUMBER_WORKING_ENTITIES, *YUKA_SWEEPER_NUMBER_ENTITIES)
             if is_original_yuka
             else NUMBER_WORKING_ENTITIES
         )
@@ -471,10 +487,15 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
     @property
     def available(self) -> bool:
         """Return True when this number applies to the current Yuka settings."""
-        if self.entity_description.available_fn is None:
-            return super().available
-        return super().available and self.entity_description.available_fn(
-            self.coordinator
+        if not super().available:
+            return False
+        if (
+            self.entity_description.device_task_setting
+            and not self.coordinator.route_task_settings_available
+        ):
+            return False
+        return self.entity_description.available_fn is None or (
+            self.entity_description.available_fn(self.coordinator)
         )
 
 

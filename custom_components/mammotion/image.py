@@ -18,7 +18,12 @@ from .const import (
     MAP_BASE_LAYER_OPENSTREETMAP,
     MAP_BASE_LAYER_SATELLITE,
 )
-from .coordinator import MammotionReportUpdateCoordinator, is_active_mow_task
+from .coordinator import (
+    MammotionReportUpdateCoordinator,
+    has_current_native_dynamics,
+    has_current_native_route,
+    is_active_mow_task,
+)
 from .entity import MammotionBaseEntity
 from .geojson_utils import apply_coord, apply_geojson_offset
 from .map_renderer import (
@@ -136,15 +141,18 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         if mower is None:
             return (self._PLACEHOLDER_CONTENT_KEY,)
 
-        trail = self._native_trail_coordinates(mower)
-        last_trail_point = trail[-1] if trail else None
+        trail_signature = (
+            self._native_trail_signature(mower)
+            if has_current_native_dynamics(mower)
+            else ()
+        )
         active = is_active_mow_task(mower)
         offset_key = (
             round(float(self.coordinator.map_offset_lat), 7),
             round(float(self.coordinator.map_offset_lon), 7),
         )
         mower_location = self._offset_location(mower.location.device)
-        if not active and not trail:
+        if not active and not trail_signature:
             return (
                 "idle",
                 self._tile_provider().key,
@@ -156,8 +164,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             "live" if active else "retained",
             self._tile_provider().key,
             offset_key,
-            len(trail),
-            self._rounded_point(last_trail_point),
+            trail_signature,
             self._rounded_location(mower_location),
         )
 
@@ -212,13 +219,13 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         )
         feature_collections = [base_geojson]
         active = is_active_mow_task(mower)
-        if active and MammotionMapImage._has_current_native_route(mower):
+        if active and has_current_native_route(mower):
             feature_collections.append(
                 MammotionMapImage._line_geojson(
                     getattr(mower.map, "generated_mow_progress_geojson", None),
                 )
             )
-        if active:
+        if active and has_current_native_dynamics(mower):
             feature_collections.append(
                 MammotionMapImage._line_geojson(
                     getattr(mower.map, "generated_dynamics_line_geojson", None),
@@ -237,11 +244,14 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         }
 
     @staticmethod
-    def _native_trail_coordinates(mower: Any) -> list[tuple[float, float]]:
-        """Return device-provided dynamics-line coordinates for cache keys."""
+    def _native_trail_signature(
+        mower: Any,
+    ) -> tuple[tuple[tuple[float, float], ...], ...]:
+        """Return all device-provided dynamics-line segments for cache keys."""
         geojson = getattr(mower.map, "generated_dynamics_line_geojson", None)
         if not isinstance(geojson, dict):
-            return []
+            return ()
+        segments: list[tuple[tuple[float, float], ...]] = []
         for feature in geojson.get("features") or []:
             if not isinstance(feature, dict):
                 continue
@@ -249,40 +259,36 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             geometry = feature.get("geometry") or {}
             if properties.get("type_name") != "dynamics_line":
                 continue
-            if geometry.get("type") != "LineString":
-                continue
-            coordinates = geometry.get("coordinates") or []
-            return [
-                (float(point[0]), float(point[1]))
-                for point in coordinates
-                if isinstance(point, (list, tuple)) and len(point) >= 2
-            ]
+            for raw_segment in MammotionMapImage._line_segments(geometry):
+                segment = tuple(
+                    rounded
+                    for point in raw_segment
+                    if (rounded := MammotionMapImage._rounded_coordinate(point))
+                    is not None
+                )
+                if segment:
+                    segments.append(segment)
+        return tuple(segments)
+
+    @staticmethod
+    def _line_segments(geometry: dict[str, Any]) -> list[list[Any]]:
+        """Return the line segments represented by a GeoJSON geometry."""
+        coordinates = geometry.get("coordinates") or []
+        if geometry.get("type") == "LineString":
+            return [coordinates]
+        if geometry.get("type") == "MultiLineString":
+            return coordinates
         return []
 
     @staticmethod
-    def _has_current_native_route(mower: Any) -> bool:
-        """Return whether cached path geometry matches confirmed live telemetry."""
-        try:
-            work = mower.report_data.work
-            path_hash = int(work.path_hash)
-            ub_path_hash = int(work.ub_path_hash)
-            effective_hash = (
-                path_hash
-                if path_hash not in (0, 1)
-                else ub_path_hash if ub_path_hash not in (0, 1) else 0
-            )
-            return effective_hash != 0 and mower.map.has_mow_path_for_hash(
-                effective_hash
-            )
-        except (AttributeError, TypeError, ValueError):
-            return False
-
-    @staticmethod
-    def _rounded_point(point: tuple[float, float] | None) -> tuple[float, float] | None:
-        """Round lon/lat samples enough to avoid timestamp churn from float noise."""
-        if point is None:
+    def _rounded_coordinate(point: Any) -> tuple[float, float] | None:
+        """Return a stable coordinate for a valid GeoJSON point."""
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
             return None
-        return (round(float(point[0]), 7), round(float(point[1]), 7))
+        try:
+            return (round(float(point[0]), 7), round(float(point[1]), 7))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _rounded_location(location: Any | None) -> tuple[float, float] | None:
@@ -346,6 +352,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             "dump",
             "no_go_zone",
             "obstacle",
+            "path",
             "station",
             "virtual_wall",
             "visual_obstacle_zone",
