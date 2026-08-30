@@ -452,6 +452,7 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
         if mode in (
             WorkMode.MODE_PAUSE,
+            WorkMode.MODE_CHARGING_PAUSE,
             WorkMode.MODE_READY,
             WorkMode.MODE_RETURNING,
             WorkMode.MODE_WORKING,
@@ -467,14 +468,17 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                     await self.coordinator.async_request_report_snapshot()
                     for _ in range(5):
                         mode = self.rpt_dev_status.sys_status
-                        if mode != WorkMode.MODE_PAUSE:
+                        if mode not in (
+                            WorkMode.MODE_PAUSE,
+                            WorkMode.MODE_CHARGING_PAUSE,
+                        ):
                             break
                         await asyncio.sleep(1)
                         await self.coordinator.async_request_report_snapshot()
                     mode = self.rpt_dev_status.sys_status
                     breakpoint_info = 0
                     if (
-                        mode == WorkMode.MODE_PAUSE
+                        mode in (WorkMode.MODE_PAUSE, WorkMode.MODE_CHARGING_PAUSE)
                         and self.rpt_dev_status.charge_state != 0
                     ):
                         mode = WorkMode.MODE_READY
@@ -489,7 +493,10 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                         timeout=30,
                     )
                     mode = self.rpt_dev_status.sys_status
-                if mode == WorkMode.MODE_PAUSE:
+                if mode in (
+                    WorkMode.MODE_PAUSE,
+                    WorkMode.MODE_CHARGING_PAUSE,
+                ):
                     trans_key = "resume_failed"
                     if breakpoint_info != 0:
                         response = await self.coordinator.async_send_and_wait(

@@ -22,10 +22,12 @@ acknowledgement is not evidence that the mower changed state.
 | Docked or ready | Start current task | Start | Working |
 | Docked or ready | Start explicit areas | Plan route, start | Working on requested route |
 | Paused with breakpoint | Start | Query route, resume | Working |
+| Charging-paused with breakpoint | Start | Query route, resume | Working or an explicit device rejection |
 | Returning | Start | Cancel return, query route if needed, resume or start | Working |
 | Working | Pause | Pause | Paused |
 | Working | Stop | Pause, cancel job | Ready |
 | Paused | Stop | Cancel job | Ready |
+| Charging-paused | Stop | Cancel job | Ready |
 | Returning | Stop | Cancel return, cancel job if a breakpoint remains | Ready with no resumable task |
 | Working | Dock | Pause, return to dock | Returning, then docked |
 | Paused or ready away from dock | Dock | Return to dock | Returning, then docked |

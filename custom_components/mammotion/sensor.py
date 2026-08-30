@@ -105,6 +105,8 @@ def _has_active_mow_task(mower_data: MowingDevice) -> bool:
     mode = _enum_int(mower_data.report_data.dev.sys_status)
     if mode is None:
         return False
+    if mode == _enum_int(WorkMode.MODE_RETURNING):
+        return mower_data.report_data.work.bp_info != 0
     if _is_on_charger(mower_data) and mode in {
         _enum_int(WorkMode.MODE_READY),
         _enum_int(WorkMode.MODE_PAUSE),
@@ -112,7 +114,6 @@ def _has_active_mow_task(mower_data: MowingDevice) -> bool:
         return False
     return mode in {
         _enum_int(WorkMode.MODE_WORKING),
-        _enum_int(WorkMode.MODE_RETURNING),
         _enum_int(WorkMode.MODE_PAUSE),
         _enum_int(WorkMode.MODE_CHARGING_PAUSE),
     }
