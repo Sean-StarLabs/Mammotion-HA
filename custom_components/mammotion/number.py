@@ -14,6 +14,7 @@ from homeassistant.components.number import (
 from homeassistant.const import (
     DEGREE,
     PERCENTAGE,
+    UnitOfArea,
     UnitOfLength,
     UnitOfSpeed,
 )
@@ -28,8 +29,8 @@ from pymammotion.utility.device_config import DeviceConfig
 from pymammotion.utility.device_type import DeviceType
 
 from . import MammotionConfigEntry
-from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .const import DOMAIN
+from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
 from .yuka import (
     GRID_PATTERN_VALUE,
@@ -201,6 +202,23 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
     ),
 )
 
+YUKA_SWEEPER_NUMBER_ENTITIES: tuple[
+    MammotionConfigNumberEntityDescription, ...
+] = (
+    MammotionConfigNumberEntityDescription(
+        key="dumping_interval",
+        native_min_value=5,
+        native_max_value=100,
+        native_step=1,
+        mode=NumberMode.SLIDER,
+        native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
+        set_fn=lambda coordinator, value: setattr(
+            coordinator.operation_settings, "collect_grass_frequency", value
+        ),
+        get_fn=lambda coordinator: coordinator.operation_settings.collect_grass_frequency,
+    ),
+)
+
 LUBA_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
     MammotionConfigNumberEntityDescription(
         key="blade_height",
@@ -280,7 +298,9 @@ async def async_setup_entry(
             mower.device.device_name
         ) and not is_yuka_mini_or_ml(mower.device.device_name)
         working_entities = (
-            YUKA_NUMBER_ENTITIES if is_original_yuka else NUMBER_WORKING_ENTITIES
+            (*YUKA_NUMBER_ENTITIES, *YUKA_SWEEPER_NUMBER_ENTITIES)
+            if is_original_yuka
+            else NUMBER_WORKING_ENTITIES
         )
         for entity_description in working_entities:
             entities.append(
