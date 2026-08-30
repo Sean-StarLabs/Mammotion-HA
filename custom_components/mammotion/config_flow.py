@@ -32,6 +32,7 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_ACCOUNTNAME,
     CONF_BLE_DEVICES,
+    CONF_CLOUD_AUTH_BACKOFF_UNTIL,
     CONF_DEVICE_NAME,
     CONF_HAS_CLOUD_ACCOUNT,
     CONF_MAP_BASE_LAYER,
@@ -44,6 +45,7 @@ from .const import (
     LOGGER,
     MAP_BASE_LAYER_OPENSTREETMAP,
     MAP_BASE_LAYER_OPTIONS,
+    LoginFailedError,
 )
 
 
@@ -371,6 +373,91 @@ class MammotionConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=vol.Schema(schema),
+            errors=errors,
+        )
+
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Start reauthentication for an existing cloud account."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Validate replacement cloud credentials while BLE remains available."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        if TYPE_CHECKING:
+            assert entry
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            account = user_input[CONF_ACCOUNTNAME].strip()
+            password = user_input[CONF_PASSWORD].strip()
+            integration = await async_get_integration(self.hass, DOMAIN)
+            temp_client = MammotionClient(
+                ha_version=integration.version.split("-")[0]
+            )
+            try:
+                session = aiohttp_client.async_get_clientsession(self.hass)
+                await temp_client.login_and_initiate_cloud(account, password, session)
+                login_info = (
+                    temp_client.mammotion_http.login_info
+                    if temp_client.mammotion_http is not None
+                    else None
+                )
+                if login_info is None:
+                    errors["base"] = "login_failed"
+                else:
+                    account_id = login_info.userInformation.userAccount
+                    existing_account_id = entry.data.get(CONF_ACCOUNT_ID)
+                    if existing_account_id and account_id != existing_account_id:
+                        errors["base"] = "account_mismatch"
+                    else:
+                        store_cloud_credentials(self.hass, entry, temp_client)
+                        updated_entry = self.hass.config_entries.async_get_entry(
+                            entry.entry_id
+                        )
+                        if TYPE_CHECKING:
+                            assert updated_entry
+                        updated_data = {
+                            key: value
+                            for key, value in updated_entry.data.items()
+                            if key != CONF_CLOUD_AUTH_BACKOFF_UNTIL
+                        }
+                        return self.async_update_reload_and_abort(
+                            entry=updated_entry,
+                            data={
+                                **updated_data,
+                                CONF_ACCOUNTNAME: account,
+                                CONF_PASSWORD: password,
+                                CONF_ACCOUNT_ID: account_id,
+                                CONF_USE_WIFI: True,
+                                CONF_HAS_CLOUD_ACCOUNT: True,
+                            },
+                            reason="reauth_successful",
+                        )
+            except LoginFailedError:
+                errors["base"] = "login_failed"
+            except TooManyRequestsException:
+                errors["base"] = "cannot_connect"
+            except Exception as err:  # noqa: BLE001
+                LOGGER.exception("Unexpected error during reauthentication: %s", err)
+                errors["base"] = "cannot_connect"
+            finally:
+                await temp_client.stop()
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ACCOUNTNAME,
+                        default=entry.data.get(CONF_ACCOUNTNAME, ""),
+                    ): cv.string,
+                    vol.Required(CONF_PASSWORD): cv.string,
+                }
+            ),
             errors=errors,
         )
 

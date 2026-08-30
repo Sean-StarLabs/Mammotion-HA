@@ -9,13 +9,15 @@
       "no_longer_present": "Device is no longer present",
       "not_supported": "Device not supported",
       "reconfigure_successful": "Re-configure successful",
+      "reauth_successful": "Re-authentication successful",
       "api_limit_exceeded": "API rate limit has been exceeded. Please try again later.",
       "account_in_use": "Your Mammotion account is already in use in another session. Sign out of the Mammotion app and try again."
     },
     "error": {
       "login_failed": "Login failed. Check your account email and password, then try again.",
       "cannot_connect": "Unable to connect to the Mammotion cloud. Check your credentials and network, then try again.",
-      "no_account_no_ble": "No account details entered and no Bluetooth device found. Enter your Mammotion account credentials, or set up a Bluetooth device."
+      "no_account_no_ble": "No account details entered and no Bluetooth device found. Enter your Mammotion account credentials, or set up a Bluetooth device.",
+      "account_mismatch": "Sign in with the Mammotion account already configured for this integration."
     },
     "flow_title": "{name}",
     "step": {
@@ -31,6 +33,13 @@
           "account_name": "Mammotion email or account number",
           "password": "Mammotion account password"
         }
+      },
+      "reauth_confirm": {
+        "data": {
+          "account_name": "Mammotion email or account number",
+          "password": "Mammotion account password"
+        },
+        "description": "Enter updated credentials for your Mammotion account. Bluetooth-connected mowers remain available during re-authentication."
       },
       "user": {
         "data": {

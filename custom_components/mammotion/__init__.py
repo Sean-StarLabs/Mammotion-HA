@@ -9,8 +9,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
 import betterproto2
-from aiohttp import ClientConnectorError
 from aioesphomeapi.core import BluetoothGATTAPIError
+from aiohttp import ClientConnectorError
 from bleak.exc import BleakError
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
@@ -58,6 +58,7 @@ from .const import (
     CONF_AEP_DATA,
     CONF_AUTH_DATA,
     CONF_BLE_DEVICES,
+    CONF_CLOUD_AUTH_BACKOFF_UNTIL,
     CONF_CONNECT_DATA,
     CONF_DEVICE_DATA,
     CONF_DEVICE_NAME,
@@ -112,7 +113,6 @@ PLATFORMS: list[Platform] = [
 type MammotionConfigEntry = ConfigEntry[MammotionDevices]
 
 _CLOUD_AUTH_BACKOFF = timedelta(hours=12)
-_CLOUD_AUTH_BACKOFF_UNTIL = "cloud_auth_backoff_until"
 _CLOUD_AUTH_RETRY_TIMERS = f"{DOMAIN}_cloud_auth_retry_timers"
 _LUBA_SUB_MESSAGES = (
     "net",
@@ -227,7 +227,7 @@ _patch_mower_state_reducer()
 
 
 def _cloud_auth_backoff_until(data: Mapping[str, Any]) -> datetime | None:
-    raw_deadline = data.get(_CLOUD_AUTH_BACKOFF_UNTIL)
+    raw_deadline = data.get(CONF_CLOUD_AUTH_BACKOFF_UNTIL)
     if not isinstance(raw_deadline, str):
         return None
     try:
@@ -247,14 +247,14 @@ def _cloud_auth_backoff_active(data: Mapping[str, Any]) -> bool:
 def _with_cloud_auth_backoff(data: Mapping[str, Any]) -> dict[str, Any]:
     return {
         **data,
-        _CLOUD_AUTH_BACKOFF_UNTIL: (
+        CONF_CLOUD_AUTH_BACKOFF_UNTIL: (
             datetime.now(UTC) + _CLOUD_AUTH_BACKOFF
         ).isoformat(),
     }
 
 
 def _without_cloud_auth_backoff(data: Mapping[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in data.items() if k != _CLOUD_AUTH_BACKOFF_UNTIL}
+    return {k: v for k, v in data.items() if k != CONF_CLOUD_AUTH_BACKOFF_UNTIL}
 
 
 def _cancel_cloud_auth_retry(hass: HomeAssistant, entry_id: str) -> None:
@@ -363,10 +363,12 @@ async def _async_attempt_login(
         if ble_fallback:
             LOGGER.warning(
                 "Mammotion cloud login failed; keeping cloud account configured "
-                "and continuing with Bluetooth fallback: %s",
+                "and continuing with Bluetooth fallback while re-authentication "
+                "is required: %s",
                 err,
             )
-            _start_cloud_auth_backoff(hass, entry)
+            _cancel_cloud_auth_retry(hass, entry.entry_id)
+            entry.async_start_reauth(hass)
             return False
         raise ConfigEntryAuthFailed(err) from err
     except EXPIRED_CREDENTIAL_EXCEPTIONS as exc:
@@ -404,10 +406,11 @@ async def _async_attempt_login(
                 LOGGER.warning(
                     "Mammotion cloud login failed after cache clear; keeping "
                     "cloud account configured and continuing with Bluetooth "
-                    "fallback: %s",
+                    "fallback while re-authentication is required: %s",
                     retry_err,
                 )
-                _start_cloud_auth_backoff(hass, entry)
+                _cancel_cloud_auth_retry(hass, entry.entry_id)
+                entry.async_start_reauth(hass)
                 return False
             raise ConfigEntryAuthFailed(retry_err) from retry_err
         except EXPIRED_CREDENTIAL_EXCEPTIONS as retry_err:
@@ -482,6 +485,7 @@ async def _attach_ble_to_mower(
 
     service_info = bluetooth.async_last_service_info(hass, ble_address.upper(), True)
     if service_info is not None:
+        # update_ble_device also creates the initial transport when one is absent.
         await mammotion.update_ble_device(
             device.device_name,
             service_info.device,
@@ -625,7 +629,11 @@ async def _async_setup_map_best_effort(
             )
             map_coordinator.config_entry.async_on_unload(cancel)
 
-    map_coordinator.hass.async_create_task(_run_map_setup())
+    map_coordinator.config_entry.async_create_background_task(
+        map_coordinator.hass,
+        _run_map_setup(),
+        f"mammotion-map-setup-{map_coordinator.device_name}",
+    )
 
     async def _async_periodic_map_refresh(_: datetime) -> None:
         await map_coordinator.async_request_refresh()
