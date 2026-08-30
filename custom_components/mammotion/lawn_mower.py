@@ -45,50 +45,50 @@ class _CommandPreempted(Exception):
     """Raised internally when a safety action supersedes a pending start."""
 
 START_MOW_SCHEMA = {
-    vol.Optional("modify", default=False): cv.boolean,
-    vol.Optional("plan_only", default=False): cv.boolean,
-    vol.Optional("is_mow", default=True): cv.boolean,
-    vol.Optional("is_dump", default=True): cv.boolean,
-    vol.Optional("is_edge", default=False): cv.boolean,
-    vol.Optional("collect_grass_frequency", default=10): vol.All(
+    vol.Optional("modify"): cv.boolean,
+    vol.Optional("plan_only"): cv.boolean,
+    vol.Optional("is_mow"): cv.boolean,
+    vol.Optional("is_dump"): cv.boolean,
+    vol.Optional("is_edge"): cv.boolean,
+    vol.Optional("collect_grass_frequency"): vol.All(
         vol.Coerce(int), vol.Range(min=5, max=100)
     ),
-    vol.Optional("border_mode", default=1): vol.All(vol.Coerce(int), vol.In([0, 1])),
-    vol.Optional("job_version", default=0): vol.Coerce(int),
-    vol.Optional("job_id", default=0): vol.Coerce(int),
-    vol.Optional("speed", default=0.3): vol.All(
+    vol.Optional("border_mode"): vol.All(vol.Coerce(int), vol.In([0, 1])),
+    vol.Optional("job_version"): vol.Coerce(int),
+    vol.Optional("job_id"): vol.Coerce(int),
+    vol.Optional("speed"): vol.All(
         vol.Coerce(float), vol.Range(min=0.2, max=1.2)
     ),
-    vol.Optional("ultra_wave", default=2): vol.All(
+    vol.Optional("ultra_wave"): vol.All(
         vol.Coerce(int), vol.In([0, 1, 2, 10, 11])
     ),
-    vol.Optional("channel_mode", default=0): vol.All(
+    vol.Optional("channel_mode"): vol.All(
         vol.Coerce(int), vol.In([0, 1, 2, 3])
     ),
     vol.Optional("channel_width"): vol.All(
         vol.Coerce(int), vol.Range(min=5, max=35)
     ),
-    vol.Optional("rain_tactics", default=1): vol.All(vol.Coerce(int), vol.In([0, 1])),
-    vol.Optional("blade_height", default=25): vol.All(
+    vol.Optional("rain_tactics"): vol.All(vol.Coerce(int), vol.In([0, 1])),
+    vol.Optional("blade_height"): vol.All(
         vol.Coerce(int), vol.Range(min=15, max=100)
     ),
-    vol.Optional("toward", default=0): vol.All(
+    vol.Optional("toward"): vol.All(
         vol.Coerce(int), vol.Range(min=-180, max=180)
     ),
-    vol.Optional("toward_included_angle", default=0): vol.All(
+    vol.Optional("toward_included_angle"): vol.All(
         vol.Coerce(int), vol.Range(min=-180, max=180)
     ),
-    vol.Optional("toward_mode", default=0): vol.All(vol.Coerce(int), vol.In([0, 1, 2])),
-    vol.Optional("mowing_laps", default=1): vol.All(
+    vol.Optional("toward_mode"): vol.All(vol.Coerce(int), vol.In([0, 1, 2])),
+    vol.Optional("mowing_laps"): vol.All(
         vol.Coerce(int), vol.In([0, 1, 2, 3, 4])
     ),
-    vol.Optional("obstacle_laps", default=1): vol.All(
+    vol.Optional("obstacle_laps"): vol.All(
         vol.Coerce(int), vol.In([0, 1, 2, 3, 4])
     ),
-    vol.Optional("start_progress", default=0): vol.All(
+    vol.Optional("start_progress"): vol.All(
         vol.Coerce(int), vol.Range(min=0, max=100)
     ),
-    vol.Optional("areas", default=[]): vol.All(cv.ensure_list, [cv.entity_id]),
+    vol.Optional("areas"): vol.All(cv.ensure_list, [cv.entity_id]),
 }
 
 START_STOP_BLADES_SCHEMA = {
@@ -416,21 +416,20 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
         explicit_route = bool(kwargs)
         if kwargs:
-            entity_ids = kwargs.pop("areas", [])
-            attributes = [
-                # TODO this should not need to be cast.
-                int(entity_hash)
-                for entity_id in entity_ids
-                if (entity_hash := get_entity_attribute(self.hass, entity_id, "hash"))
-                is not None
-            ]
+            entity_ids = kwargs.pop("areas", None)
             modify_plan = kwargs.pop("modify", False)
             plan_only = kwargs.pop("plan_only", False)
 
             # Merge onto coordinator's restored settings so UI-configured values
             # (speed, blade_height, etc.) are preserved when not explicitly provided.
             operational_settings = copy(self.coordinator.operation_settings)
-            operational_settings.areas = list(dict.fromkeys(attributes))
+            if entity_ids is not None:
+                attributes = []
+                for entity_id in entity_ids:
+                    entity_hash = get_entity_attribute(self.hass, entity_id, "hash")
+                    if entity_hash is not None:
+                        attributes.append(int(entity_hash))
+                operational_settings.areas = list(dict.fromkeys(attributes))
             for key, value in kwargs.items():
                 setattr(operational_settings, key, value)
             if DeviceType.is_yuka(self.coordinator.device_name):

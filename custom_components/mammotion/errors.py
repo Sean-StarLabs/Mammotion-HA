@@ -38,13 +38,13 @@ def get_mammotion_error_details(
     number: int = 1,
 ) -> MammotionErrorDetails | None:
     """Return a reported Mammotion error and its localised guidance."""
+    timestamps = device.errors.err_code_list_time
     errors = [
-        (abs(int(code)), int(timestamp))
-        for code, timestamp in zip(
-            device.errors.err_code_list,
-            device.errors.err_code_list_time,
-            strict=False,
+        (
+            abs(int(code)),
+            int(timestamps[index]) if index < len(timestamps) else 0,
         )
+        for index, code in enumerate(device.errors.err_code_list)
         if int(code) != 0
     ]
     if number < 1 or number > len(errors):

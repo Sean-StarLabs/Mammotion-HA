@@ -258,6 +258,15 @@ async def async_setup_entry(
                 MammotionSwitchEntity(coordinator, d) for d in AUDIO_SWITCH_ENTITIES
             )
 
+        entities.extend(
+            MammotionUpdateSwitchEntity(coordinator, d)
+            for d in UPDATE_SWITCH_ENTITIES
+        )
+        entities.extend(
+            MammotionSwitchEntity(coordinator, d)
+            for d in CONNECTIVITY_SWITCH_ENTITIES
+        )
+
         if is_yuka_2(device_name):
             entities.extend(
                 MammotionSwitchEntity(coordinator, d)
@@ -269,13 +278,6 @@ async def async_setup_entry(
         entities.extend(
             MammotionConfigSwitchEntity(coordinator, d) for d in CONFIG_SWITCH_ENTITIES
         )
-        entities.extend(
-            MammotionUpdateSwitchEntity(coordinator, d) for d in UPDATE_SWITCH_ENTITIES
-        )
-        entities.extend(
-            MammotionSwitchEntity(coordinator, d) for d in CONNECTIVITY_SWITCH_ENTITIES
-        )
-
         if DeviceType.is_yuka(device_name) and not DeviceType.is_yuka_mini(device_name):
             entities.extend(
                 MammotionConfigSwitchEntity(coordinator, d)
@@ -896,9 +898,6 @@ def _cleanup_removed_yuka_2_switches(
         "is_dump",
         "is_edge",
         "rain_tactics",
-        "schedule_updates",
-        "bluetooth_enabled",
-        "cloud_enabled",
     ):
         entity_id = registry.async_get_entity_id(
             SWITCH_DOMAIN,
