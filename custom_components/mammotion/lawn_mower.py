@@ -65,7 +65,7 @@ START_MOW_SCHEMA = {
     vol.Optional("channel_mode", default=0): vol.All(
         vol.Coerce(int), vol.In([0, 1, 2, 3])
     ),
-    vol.Optional("channel_width", default=25): vol.All(
+    vol.Optional("channel_width"): vol.All(
         vol.Coerce(int), vol.Range(min=5, max=35)
     ),
     vol.Optional("rain_tactics", default=1): vol.All(vol.Coerce(int), vol.In([0, 1])),

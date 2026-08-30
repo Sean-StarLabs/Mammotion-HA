@@ -141,13 +141,18 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         trail = self._native_trail_coordinates(mower)
         last_trail_point = trail[-1] if trail else None
         active = self._is_live_report_active(mower)
+        offset_key = (
+            round(float(self.coordinator.map_offset_lat), 7),
+            round(float(self.coordinator.map_offset_lon), 7),
+        )
         if not active and not trail:
-            return ("idle", self._tile_provider().key)
+            return ("idle", self._tile_provider().key, offset_key)
 
         mower_location = self._offset_location(mower.location.device) if active else None
         return (
             "live" if active else "retained",
             self._tile_provider().key,
+            offset_key,
             len(trail),
             self._rounded_point(last_trail_point),
             self._rounded_location(mower_location),

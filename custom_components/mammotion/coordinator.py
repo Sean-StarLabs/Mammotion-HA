@@ -1311,9 +1311,6 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
 
         if work := cast(MowingDevice, self.data).work:
             operation_settings.areas = list(dict.fromkeys(work.zone_hashs))
-            operation_settings.toward = work.toward
-            operation_settings.toward_mode = work.toward_mode
-            operation_settings.toward_included_angle = work.toward_included_angle
             operation_settings.mowing_laps = work.edge_mode
             operation_settings.job_mode = work.job_mode
             operation_settings.job_id = work.job_id
@@ -1324,7 +1321,6 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         result = await self.async_send_command(
             "modify_route_information", generate_route_information=route_information
         )
-        self.sync_operation_settings_from_current_task()
         return result
 
     async def start_task(self, plan_id: str) -> None:

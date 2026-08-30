@@ -67,6 +67,10 @@ ESRI_WORLD_IMAGERY_TILE_PROVIDER = MapTileProvider(
 )
 
 
+class _TileProviderUnavailable(Exception):
+    """Raised after a tile provider request fails during one render."""
+
+
 @dataclass(frozen=True)
 class GeoBounds:
     """Geographic bounds in WGS84 lon/lat."""
@@ -212,15 +216,21 @@ def _render_osm_source(
         math.floor((source_min_y + source_height) / OSM_TILE_SIZE), max_tile
     )
 
+    allow_download = True
     for tile_x in range(min_tile_x, max_tile_x + 1):
         for tile_y in range(min_tile_y, max_tile_y + 1):
-            tile = _load_osm_tile(
-                zoom,
-                tile_x,
-                tile_y,
-                tile_cache_dir,
-                tile_provider,
-            )
+            try:
+                tile = _load_osm_tile(
+                    zoom,
+                    tile_x,
+                    tile_y,
+                    tile_cache_dir,
+                    tile_provider,
+                    allow_download=allow_download,
+                )
+            except _TileProviderUnavailable:
+                allow_download = False
+                continue
             if tile is None:
                 continue
             source.alpha_composite(
@@ -239,6 +249,8 @@ def _load_osm_tile(
     tile_y: int,
     tile_cache_dir: str | None,
     tile_provider: MapTileProvider,
+    *,
+    allow_download: bool = True,
 ) -> Image.Image | None:
     cache_path: Path | None = None
     if tile_cache_dir:
@@ -248,6 +260,9 @@ def _load_osm_tile(
                 return Image.open(cache_path).copy()
             except OSError:
                 cache_path.unlink(missing_ok=True)
+
+    if not allow_download:
+        return None
 
     tile_url = tile_provider.tile_url(zoom, tile_x, tile_y)
     if not tile_url.startswith("https://"):
@@ -259,17 +274,19 @@ def _load_osm_tile(
     try:
         with urlopen(request, timeout=5) as response:  # noqa: S310
             tile_bytes = response.read()
-    except (HTTPError, OSError, TimeoutError, URLError):
-        return None
+    except (HTTPError, OSError, TimeoutError, URLError) as err:
+        raise _TileProviderUnavailable from err
+
+    try:
+        tile = Image.open(BytesIO(tile_bytes)).copy()
+    except OSError as err:
+        raise _TileProviderUnavailable from err
 
     if cache_path:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_bytes(tile_bytes)
 
-    try:
-        return Image.open(BytesIO(tile_bytes)).copy()
-    except OSError:
-        return None
+    return tile
 
 
 def _draw_attribution(draw: ImageDraw.ImageDraw, attribution: str) -> None:

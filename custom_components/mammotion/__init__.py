@@ -112,6 +112,7 @@ type MammotionConfigEntry = ConfigEntry[MammotionDevices]
 
 _CLOUD_AUTH_BACKOFF = timedelta(hours=12)
 _CLOUD_AUTH_BACKOFF_UNTIL = "cloud_auth_backoff_until"
+_CLOUD_AUTH_RETRY_TIMERS = f"{DOMAIN}_cloud_auth_retry_timers"
 _LUBA_SUB_MESSAGES = (
     "net",
     "sys",
@@ -255,16 +256,70 @@ def _without_cloud_auth_backoff(data: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if k != _CLOUD_AUTH_BACKOFF_UNTIL}
 
 
-def _start_cloud_auth_backoff(
+def _cancel_cloud_auth_retry(hass: HomeAssistant, entry_id: str) -> None:
+    """Cancel a pending cloud-auth retry for a config entry."""
+    timers: dict[str, Any] | None = hass.data.get(_CLOUD_AUTH_RETRY_TIMERS)
+    if timers is None:
+        return
+    if cancel := timers.pop(entry_id, None):
+        cancel()
+    if not timers:
+        hass.data.pop(_CLOUD_AUTH_RETRY_TIMERS, None)
+
+
+def _schedule_cloud_auth_retry(
     hass: HomeAssistant,
     entry: MammotionConfigEntry,
 ) -> None:
-    if _cloud_auth_backoff_active(entry.data):
+    """Reload the entry when its BLE-fallback cloud backoff expires."""
+    deadline = _cloud_auth_backoff_until(entry.data)
+    if deadline is None:
         return
+
+    _cancel_cloud_auth_retry(hass, entry.entry_id)
+
+    async def _async_retry(_: datetime) -> None:
+        timers: dict[str, Any] | None = hass.data.get(_CLOUD_AUTH_RETRY_TIMERS)
+        if timers is not None:
+            timers.pop(entry.entry_id, None)
+            if not timers:
+                hass.data.pop(_CLOUD_AUTH_RETRY_TIMERS, None)
+        if hass.config_entries.async_get_entry(entry.entry_id) is None:
+            return
+        if _cloud_auth_backoff_active(entry.data):
+            _schedule_cloud_auth_retry(hass, entry)
+            return
+        await hass.config_entries.async_reload(entry.entry_id)
+
+    cancel = async_call_later(
+        hass,
+        max((deadline - datetime.now(UTC)).total_seconds(), 0),
+        HassJob(
+            _async_retry,
+            f"mammotion-cloud-auth-retry-{entry.entry_id}",
+            cancel_on_shutdown=True,
+        ),
+    )
+    timers = hass.data.setdefault(_CLOUD_AUTH_RETRY_TIMERS, {})
+    timers[entry.entry_id] = cancel
+    entry.async_on_unload(
+        lambda: _cancel_cloud_auth_retry(hass, entry.entry_id)
+    )
+
+
+def _start_cloud_auth_backoff(
+    hass: HomeAssistant,
+    entry: MammotionConfigEntry,
+    data: Mapping[str, Any] | None = None,
+) -> None:
+    backoff_data = entry.data if data is None else data
+    if not _cloud_auth_backoff_active(backoff_data):
+        backoff_data = _with_cloud_auth_backoff(backoff_data)
     hass.config_entries.async_update_entry(
         entry,
-        data=_with_cloud_auth_backoff(entry.data),
+        data=dict(backoff_data),
     )
+    _schedule_cloud_auth_retry(hass, entry)
 
 
 def _has_ble_devices(entry: MammotionConfigEntry) -> bool:
@@ -341,9 +396,10 @@ async def _async_attempt_login(
                     "Mammotion cached cloud credentials expired; continuing with "
                     "Bluetooth fallback and backing off cloud login"
                 )
-                hass.config_entries.async_update_entry(
+                _start_cloud_auth_backoff(
+                    hass,
                     entry,
-                    data=_with_cloud_auth_backoff(data_without_stale_credentials),
+                    data_without_stale_credentials,
                 )
                 return False
         try:
@@ -617,6 +673,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
             "fallback without another cloud login attempt",
             deadline.isoformat() if deadline is not None else "unknown",
         )
+        _schedule_cloud_auth_retry(hass, entry)
     elif has_cloud_account and account and password:
         cloud_available = await _async_attempt_login(
             hass,
@@ -681,6 +738,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
 
         mammotion.on_device_removed = _on_device_removed
         if _cloud_auth_backoff_until(entry.data) is not None:
+            _cancel_cloud_auth_retry(hass, entry.entry_id)
             hass.config_entries.async_update_entry(
                 entry,
                 data=_without_cloud_auth_backoff(entry.data),
