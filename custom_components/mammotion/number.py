@@ -49,6 +49,7 @@ class MammotionConfigNumberEntityDescription(NumberEntityDescription):  # type: 
     ) = None
     get_fn: Callable[[MammotionBaseUpdateCoordinator[Any]], float | None] | None = None
     available_fn: Callable[[MammotionBaseUpdateCoordinator[Any]], bool] | None = None
+    device_task_setting: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -157,6 +158,7 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         native_step=0.1,
         native_min_value=0.2,
         native_max_value=0.6,
+        device_task_setting=True,
         set_async_fn=lambda coordinator,
         value: coordinator.async_modify_plan_if_mowing(),
         set_fn=lambda coordinator, value: setattr(
@@ -171,6 +173,7 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfLength.CENTIMETERS,
         native_min_value=8,
         native_max_value=12,
+        device_task_setting=True,
         set_async_fn=lambda coordinator,
         value: coordinator.async_modify_plan_if_mowing(),
         set_fn=lambda coordinator, value: setattr(
@@ -184,6 +187,7 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         native_unit_of_measurement=DEGREE,
         native_min_value=-180,
         native_max_value=180,
+        device_task_setting=True,
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward", value
         ),
@@ -205,6 +209,7 @@ LUBA_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         native_step=1,
         native_min_value=25,
         native_max_value=70,
+        device_task_setting=True,
         mode=NumberMode.SLIDER,
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "blade_height", int(value)
@@ -417,7 +422,10 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
     async def async_added_to_hass(self) -> None:
         """Restore last saved value when entity is added to hass."""
         await super().async_added_to_hass()
-        if self.entity_description.get_fn is not None:
+        if (
+            self.entity_description.device_task_setting
+            and self.coordinator.operation_settings_from_device
+        ):
             self._sync_native_value_from_coordinator()
             return
         last_number_data = await self.async_get_last_number_data()

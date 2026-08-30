@@ -78,6 +78,7 @@ class MammotionConfigSelectEntityDescription(SelectEntityDescription):
     set_fn: Callable[[MammotionBaseUpdateCoordinator, str], None]
     get_fn: Callable[[MammotionBaseUpdateCoordinator], str | None] | None = None
     default_option: str | None = None
+    device_task_setting: bool = False
     async_set_fn: (
         Callable[[MammotionBaseUpdateCoordinator], Awaitable[None]] | None
     ) = None
@@ -361,6 +362,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         key="border_mode",
         options=[order.name for order in MowOrder],
         default_option=MowOrder.border_first.name,
+        device_task_setting=True,
         get_fn=_get_yuka_mow_order,
         set_fn=_set_yuka_mow_order,
     ),
@@ -368,6 +370,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         key="mowing_laps",
         options=LAP_OPTIONS,
         default_option="three",
+        device_task_setting=True,
         get_fn=lambda coordinator: _get_yuka_lap(coordinator, "mowing_laps"),
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "mowing_laps", LAP_VALUES[value]
@@ -377,6 +380,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         key="obstacle_laps",
         options=LAP_OPTIONS,
         default_option="none",
+        device_task_setting=True,
         get_fn=lambda coordinator: _get_yuka_lap(coordinator, "obstacle_laps"),
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "obstacle_laps", LAP_VALUES[value]
@@ -386,6 +390,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         key="bypass_mode",
         options=OBSTACLE_OPTIONS,
         default_option="standard",
+        device_task_setting=True,
         get_fn=_get_yuka_obstacle_detection,
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "ultra_wave", OBSTACLE_VALUES[value]
@@ -396,6 +401,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         key="pattern_family",
         options=PATTERN_FAMILY_OPTIONS,
         default_option="grid",
+        device_task_setting=True,
         get_fn=_get_pattern_family,
         set_fn=_set_pattern_family,
         async_set_fn=lambda coordinator: coordinator.async_modify_plan_if_mowing(),
@@ -404,6 +410,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         key="stripes_pattern",
         options=STRIPES_PATTERN_OPTIONS,
         default_option="random",
+        device_task_setting=True,
         get_fn=lambda coordinator: _get_pattern_variant(
             coordinator, STRIPES_PATTERN_OPTIONS
         ),
@@ -416,6 +423,7 @@ YUKA_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         key="grid_pattern",
         options=GRID_PATTERN_OPTIONS,
         default_option="random",
+        device_task_setting=True,
         get_fn=lambda coordinator: _get_pattern_variant(
             coordinator, GRID_PATTERN_OPTIONS
         ),
@@ -687,7 +695,10 @@ class MammotionConfigSelectEntity(MammotionBaseEntity, SelectEntity, RestoreEnti
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
         await super().async_added_to_hass()
-        if self.entity_description.get_fn is not None:
+        if (
+            self.entity_description.device_task_setting
+            and self.coordinator.operation_settings_from_device
+        ):
             self._attr_current_option = self._resolve_option()
             return
         if (state := await self.async_get_last_state()) is not None:

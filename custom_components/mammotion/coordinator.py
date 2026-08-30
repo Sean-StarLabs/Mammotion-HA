@@ -163,6 +163,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         )
         self.manager: MammotionClient = mammotion
         self._operation_settings = OperationSettings()
+        self._operation_settings_from_device = False
         self.update_failures = 0
         self._stream_data: Response[StreamSubscriptionResponse] | None = (
             None  # Stream data [Agora]
@@ -1432,6 +1433,11 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         """Return operation settings for planning."""
         return self._operation_settings
 
+    @property
+    def operation_settings_from_device(self) -> bool:
+        """Return whether a device task supplied the operation settings."""
+        return self._operation_settings_from_device
+
     def _current_task_from_route_response(
         self, response: Any
     ) -> CurrentTaskSettings | None:
@@ -1493,6 +1499,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
 
     def _sync_operation_settings_from_work(self, work: CurrentTaskSettings) -> None:
         """Mirror accepted route settings from current task data."""
+        self._operation_settings_from_device = True
         path_order = GenerateRouteInformation.decode_path_order(work.reserved)
         self._operation_settings.areas = [
             area for area in list(dict.fromkeys(work.zone_hashs)) if area
