@@ -337,19 +337,9 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
                 await handle.stop_polling()
 
     def is_online(self) -> bool:
-        """Return True if the device currently has an active transport connection."""
-        device = self.manager.get_device_by_name(self.device_name)
-        if device is None:
-            return False
+        """Return whether the command path has a usable transport."""
         handle = self.manager.mower(self.device_name)
-        if handle is None:
-            return bool(device.online)
-        if handle.has_transport(TransportType.BLE) and (
-            ble := handle.get_transport(TransportType.BLE)
-        ):
-            if ble.is_usable:
-                return True
-        return bool(not handle.availability.mqtt_reported_offline)
+        return handle is not None and handle.has_usable_transport
 
     @property
     def mqtt_transport_connected(self) -> bool:

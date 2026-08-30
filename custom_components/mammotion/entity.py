@@ -25,13 +25,6 @@ from .coordinator import (
 )
 
 
-def _has_restored_online_state(coordinator: MammotionBaseUpdateCoordinator[Any]) -> bool:
-    device = coordinator.manager.get_device_by_name(coordinator.device_name)
-    if device is not None:
-        return bool(device.enabled and device.online)
-    return getattr(coordinator.device, "status", None) in (1, "1", True)
-
-
 class MammotionBaseEntity(CoordinatorEntity[MammotionBaseUpdateCoordinator[Any]]):  # type: ignore[misc]
     """Representation of a Mammotion Lawn Mower."""
 
@@ -142,14 +135,7 @@ class MammotionBaseEntity(CoordinatorEntity[MammotionBaseUpdateCoordinator[Any]]
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        if (
-            self.coordinator.data is None
-            and not self.coordinator.mqtt_transport_connected
-        ):
-            return False
-        if self.coordinator.is_online() or self.coordinator.mqtt_transport_connected:
-            return True
-        return _has_restored_online_state(self.coordinator)
+        return self.coordinator.data is not None and self.coordinator.is_online()
 
 
 class MammotionBaseRTKEntity(CoordinatorEntity[MammotionRTKCoordinator]):  # type: ignore[misc]
@@ -332,6 +318,4 @@ class MammotionCameraBaseEntity(Camera, ABC):  # type: ignore[misc]
         """Return True if entity is available."""
         if self.coordinator.data is None:
             return False
-        if self.coordinator.is_online():
-            return True
-        return _has_restored_online_state(self.coordinator)
+        return self.coordinator.is_online()
