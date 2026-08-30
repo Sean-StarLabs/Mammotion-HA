@@ -370,7 +370,7 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
         if self.entity_description.key == "toward_included_angle":
             self._attr_native_value = 90
         if self.entity_description.get_fn is not None:
-            self._attr_native_value = self.entity_description.get_fn(self.coordinator)
+            self._sync_native_value_from_coordinator()
         elif (
             self.entity_description.set_fn is not None
             and self._attr_native_value is not None
@@ -381,8 +381,28 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         if self.entity_description.get_fn is not None:
-            self._attr_native_value = self.entity_description.get_fn(self.coordinator)
+            self._sync_native_value_from_coordinator()
         super()._handle_coordinator_update()
+
+    def _sync_native_value_from_coordinator(self) -> None:
+        """Apply a device-backed value within this entity's supported range."""
+        if self.entity_description.get_fn is None:
+            return
+        value = self.entity_description.get_fn(self.coordinator)
+        if value is None:
+            self._attr_native_value = None
+            return
+        bounded_value = value
+        if self._attr_native_min_value is not None:
+            bounded_value = max(bounded_value, self._attr_native_min_value)
+        if self._attr_native_max_value is not None:
+            bounded_value = min(bounded_value, self._attr_native_max_value)
+        self._attr_native_value = bounded_value
+        if (
+            bounded_value != value
+            and self.entity_description.set_fn is not None
+        ):
+            self.entity_description.set_fn(self.coordinator, bounded_value)
 
     async def async_set_native_value(self, value: float) -> None:
         """Set native value for number."""
@@ -398,7 +418,7 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
         """Restore last saved value when entity is added to hass."""
         await super().async_added_to_hass()
         if self.entity_description.get_fn is not None:
-            self._attr_native_value = self.entity_description.get_fn(self.coordinator)
+            self._sync_native_value_from_coordinator()
             return
         last_number_data = await self.async_get_last_number_data()
         if (last_number_data is not None) and (
@@ -453,12 +473,7 @@ class MammotionWorkingNumberEntity(MammotionConfigNumberEntity):
             self._attr_native_max_value = entity_description.native_max_value
 
         if self.entity_description.get_fn is not None:
-            self._attr_native_value = self.entity_description.get_fn(self.coordinator)
-
-        native_val = self._attr_native_value
-        native_min = self._attr_native_min_value
-        if native_val is not None and native_min is not None:
-            self._attr_native_value = max(native_val, native_min)
+            self._sync_native_value_from_coordinator()
 
     @property
     def native_min_value(self) -> float:
