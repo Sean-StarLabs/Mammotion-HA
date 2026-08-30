@@ -33,7 +33,7 @@ from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.device_registry import (
     async_get as async_get_device_registry,
 )
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.loader import async_get_integration
 from pymammotion.aliyun.exceptions import TooManyRequestsException
 from pymammotion.aliyun.model.dev_by_account_response import Device
@@ -77,6 +77,7 @@ from .const import (
     LOGGER,
 )
 from .coordinator import (
+    MAP_INTERVAL,
     MammotionDeviceErrorUpdateCoordinator,
     MammotionDeviceVersionUpdateCoordinator,
     MammotionMaintenanceUpdateCoordinator,
@@ -625,6 +626,17 @@ async def _async_setup_map_best_effort(
             map_coordinator.config_entry.async_on_unload(cancel)
 
     map_coordinator.hass.async_create_task(_run_map_setup())
+
+    async def _async_periodic_map_refresh(_: datetime) -> None:
+        await map_coordinator.async_request_refresh()
+
+    map_coordinator.config_entry.async_on_unload(
+        async_track_time_interval(
+            map_coordinator.hass,
+            _async_periodic_map_refresh,
+            MAP_INTERVAL,
+        )
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) -> bool:

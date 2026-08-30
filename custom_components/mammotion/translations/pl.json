@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Preferuj Bluetooth zamiast Wi-Fi, gdy dostępne",
           "movement_use_wifi": "Wysyłaj polecenia ruchu przez Wi-Fi",
           "mow_path_fetch_enabled": "Włącz pobieranie ścieżki koszenia (chmura)",
-          "full_map_fetch_enabled": "Włącz pełne pobieranie mapy (chmura) — gdy wyłączone, pobierane są tylko nazwy obszarów"
+          "full_map_fetch_enabled": "Włącz pełne pobieranie mapy (chmura) — gdy wyłączone, pobierane są tylko nazwy obszarów",
+          "map_base_layer": "Tło mapy"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parkowanie na linii wody"
+      },
+      "auto_lighting": {
+        "name": "Automatyczne oświetlenie"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Wolne dotknięcie",
           "less_touch": "Mniej dotyku",
           "no_touch": "Standard",
-          "sensitive": "Czułe"
+          "sensitive": "Czułe",
+          "off": "Wył.",
+          "standard": "Standardowy"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Średnia",
           "slow": "Wolna",
-          "fast": "Szybka"
+          "fast": "Szybka",
+          "low": "Niska",
+          "high": "Wysoka"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Zaokrąglone (proste)",
           "CURVE_COMPLEX": "Zaokrąglone (złożone)"
         }
+      },
+      "pattern_family": {
+        "name": "Wzór koszenia",
+        "state": {
+          "perimeter_only": "Tylko obwód",
+          "stripes": "Pasy",
+          "grid": "Siatka"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Wzór pasów",
+        "state": {
+          "efficient": "Wydajny",
+          "random": "Losowy",
+          "custom": "Niestandardowy"
+        }
+      },
+      "grid_pattern": {
+        "name": "Wzór siatki",
+        "state": {
+          "default": "Domyślny",
+          "random": "Losowy",
+          "custom": "Niestandardowy"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Głośność głosu",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Prędkość na dnie basenu"
+      },
+      "pattern_angle": {
+        "name": "Kąt wzoru"
       }
     },
     "device_tracker": {
       "name": "Śledzenie urządzenia"
+    },
+    "image": {
+      "map": {
+        "name": "Mapa"
+      }
     }
   },
   "selector": {

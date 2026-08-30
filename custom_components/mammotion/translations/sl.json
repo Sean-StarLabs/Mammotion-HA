@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Daj prednost Bluetooth pred Wi-Fi, ko je na voljo",
           "movement_use_wifi": "Pošiljaj ukaze gibanja prek Wi-Fi",
           "mow_path_fetch_enabled": "Omogoči pridobivanje poti košnje (oblak)",
-          "full_map_fetch_enabled": "Omogoči pridobivanje celotnega zemljevida (oblak) — če izklopljeno, se pridobijo samo imena območij"
+          "full_map_fetch_enabled": "Omogoči pridobivanje celotnega zemljevida (oblak) — če izklopljeno, se pridobijo samo imena območij",
+          "map_base_layer": "Ozadje zemljevida"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parkiranje na vodni gladini"
+      },
+      "auto_lighting": {
+        "name": "Samodejna osvetlitev"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Počasni dotik",
           "less_touch": "Manj dotika",
           "no_touch": "Standard",
-          "sensitive": "Občutljivo"
+          "sensitive": "Občutljivo",
+          "off": "Izklopljeno",
+          "standard": "Standardno"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Srednje",
           "slow": "Počasi",
-          "fast": "Hitro"
+          "fast": "Hitro",
+          "low": "Nizko",
+          "high": "Visoko"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Zaobljeno (enostavno)",
           "CURVE_COMPLEX": "Zaobljeno (zapleteno)"
         }
+      },
+      "pattern_family": {
+        "name": "Vzorec košnje",
+        "state": {
+          "perimeter_only": "Samo obod",
+          "stripes": "Proge",
+          "grid": "Mreža"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Vzorec prog",
+        "state": {
+          "efficient": "Učinkovito",
+          "random": "Naključno",
+          "custom": "Po meri"
+        }
+      },
+      "grid_pattern": {
+        "name": "Mrežni vzorec",
+        "state": {
+          "default": "Privzeto",
+          "random": "Naključno",
+          "custom": "Po meri"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Glasnost glasu",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Hitrost na dnu bazena"
+      },
+      "pattern_angle": {
+        "name": "Kot vzorca"
       }
     },
     "device_tracker": {
       "name": "Sledenje"
+    },
+    "image": {
+      "map": {
+        "name": "Zemljevid"
+      }
     }
   },
   "selector": {

@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Upřednostňovat Bluetooth před Wi-Fi, je-li dostupné",
           "movement_use_wifi": "Odesílat příkazy pohybu přes Wi-Fi",
           "mow_path_fetch_enabled": "Povolit načítání cesty sekání",
-          "full_map_fetch_enabled": "Povolit úplné načítání mapy (cloud) — pokud vypnuto, načítají se pouze názvy oblastí"
+          "full_map_fetch_enabled": "Povolit úplné načítání mapy (cloud) — pokud vypnuto, načítají se pouze názvy oblastí",
+          "map_base_layer": "Pozadí mapy"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parkování na hladině"
+      },
+      "auto_lighting": {
+        "name": "Automatické osvětlení"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Pomalý dotek",
           "less_touch": "Méně dotyků",
           "no_touch": "Standard",
-          "sensitive": "Citlivý"
+          "sensitive": "Citlivý",
+          "off": "Vypnuto",
+          "standard": "Standardní"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Střední",
           "slow": "Pomalý",
-          "fast": "Rychlá"
+          "fast": "Rychlá",
+          "low": "Nízké",
+          "high": "Vysoké"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Zaoblené (jednoduché)",
           "CURVE_COMPLEX": "Zaoblené (složité)"
         }
+      },
+      "pattern_family": {
+        "name": "Vzor sečení",
+        "state": {
+          "perimeter_only": "Pouze obvod",
+          "stripes": "Pruhy",
+          "grid": "Mřížka"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Vzor pruhů",
+        "state": {
+          "efficient": "Efektivní",
+          "random": "Náhodný",
+          "custom": "Vlastní"
+        }
+      },
+      "grid_pattern": {
+        "name": "Vzor mřížky",
+        "state": {
+          "default": "Výchozí",
+          "random": "Náhodný",
+          "custom": "Vlastní"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Hlasitost hlasu",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Rychlost na dně bazénu"
+      },
+      "pattern_angle": {
+        "name": "Úhel vzoru"
       }
     },
     "device_tracker": {
       "name": "Sledování zařízení"
+    },
+    "image": {
+      "map": {
+        "name": "Mapa"
+      }
     }
   },
   "selector": {

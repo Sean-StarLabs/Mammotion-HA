@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Foretræk Bluetooth frem for Wi-Fi, når det er tilgængeligt",
           "movement_use_wifi": "Send bevægelseskommandoer via Wi-Fi",
           "mow_path_fetch_enabled": "Aktivér hentning af klippesti (sky)",
-          "full_map_fetch_enabled": "Aktivér fuld korthentning (sky) — når slået fra, hentes kun områdenavne"
+          "full_map_fetch_enabled": "Aktivér fuld korthentning (sky) — når slået fra, hentes kun områdenavne",
+          "map_base_layer": "Kortbaggrund"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parkering ved vandlinjen"
+      },
+      "auto_lighting": {
+        "name": "Automatisk belysning"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Langsom berøring",
           "less_touch": "Mindre berøring",
           "no_touch": "Standard",
-          "sensitive": "Følsom"
+          "sensitive": "Følsom",
+          "off": "Fra",
+          "standard": "Standard"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Mellem",
           "slow": "Langsom",
-          "fast": "Hurtig"
+          "fast": "Hurtig",
+          "low": "Lav",
+          "high": "Høj"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Buet (enkel)",
           "CURVE_COMPLEX": "Buet (kompleks)"
         }
+      },
+      "pattern_family": {
+        "name": "Klippemønster",
+        "state": {
+          "perimeter_only": "Kun kant",
+          "stripes": "Striber",
+          "grid": "Gitter"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Stribemønster",
+        "state": {
+          "efficient": "Effektiv",
+          "random": "Tilfældig",
+          "custom": "Brugerdefineret"
+        }
+      },
+      "grid_pattern": {
+        "name": "Gittermønster",
+        "state": {
+          "default": "Standard",
+          "random": "Tilfældig",
+          "custom": "Brugerdefineret"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Stemmelydstyrke",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Hastighed på poolbunden"
+      },
+      "pattern_angle": {
+        "name": "Mønstervinkel"
       }
     },
     "device_tracker": {
       "name": "Enhedssporing"
+    },
+    "image": {
+      "map": {
+        "name": "Kort"
+      }
     }
   },
   "selector": {

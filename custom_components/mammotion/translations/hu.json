@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Bluetooth előnyben részesítése Wi-Fi helyett, ha elérhető",
           "movement_use_wifi": "Mozgatási parancsok küldése Wi-Fi-n",
           "mow_path_fetch_enabled": "Nyírási útvonal lekérésének engedélyezése (felhő)",
-          "full_map_fetch_enabled": "Teljes térkép lekérésének engedélyezése (felhő) — kikapcsolva csak a területnevek kerülnek lekérésre"
+          "full_map_fetch_enabled": "Teljes térkép lekérésének engedélyezése (felhő) — kikapcsolva csak a területnevek kerülnek lekérésre",
+          "map_base_layer": "Térkép háttere"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parkolás a vízvonalnál"
+      },
+      "auto_lighting": {
+        "name": "Automatikus világítás"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Lassú érintés",
           "less_touch": "Kevesebb érintés",
           "no_touch": "Normál",
-          "sensitive": "Érzékeny"
+          "sensitive": "Érzékeny",
+          "off": "Ki",
+          "standard": "Normál"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Közepes",
           "slow": "Lassú",
-          "fast": "Gyors"
+          "fast": "Gyors",
+          "low": "Alacsony",
+          "high": "Magas"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Íves (egyszerű)",
           "CURVE_COMPLEX": "Íves (összetett)"
         }
+      },
+      "pattern_family": {
+        "name": "Nyírási minta",
+        "state": {
+          "perimeter_only": "Csak kerület",
+          "stripes": "Csíkok",
+          "grid": "Rács"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Csíkminta",
+        "state": {
+          "efficient": "Hatékony",
+          "random": "Véletlenszerű",
+          "custom": "Egyéni"
+        }
+      },
+      "grid_pattern": {
+        "name": "Rácsminta",
+        "state": {
+          "default": "Alapértelmezett",
+          "random": "Véletlenszerű",
+          "custom": "Egyéni"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Beszédhang hangereje",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Sebesség a medence alján"
+      },
+      "pattern_angle": {
+        "name": "Minta szöge"
       }
     },
     "device_tracker": {
       "name": "Eszközkövetés"
+    },
+    "image": {
+      "map": {
+        "name": "Térkép"
+      }
     }
   },
   "selector": {

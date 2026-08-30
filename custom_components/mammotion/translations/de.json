@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Wenn möglich, Bluetooth statt WLAN verwenden",
           "movement_use_wifi": "Bewegungsbefehle über WLAN senden",
           "mow_path_fetch_enabled": "Mähpfad-Abruf aktivieren (Cloud)",
-          "full_map_fetch_enabled": "Vollständigen Kartenabruf aktivieren (Cloud) — wenn aus, werden nur Bereichsnamen abgerufen"
+          "full_map_fetch_enabled": "Vollständigen Kartenabruf aktivieren (Cloud) — wenn aus, werden nur Bereichsnamen abgerufen",
+          "map_base_layer": "Kartenhintergrund"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Wasserlinien-Parken"
+      },
+      "auto_lighting": {
+        "name": "Automatische Beleuchtung"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Langsame Berührung",
           "less_touch": "Weniger Berührung",
           "no_touch": "Standard",
-          "sensitive": "Sensitiv"
+          "sensitive": "Sensitiv",
+          "off": "Aus",
+          "standard": "Standard"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Mittel",
           "slow": "Niedrig",
-          "fast": "Hoch"
+          "fast": "Hoch",
+          "low": "Niedrig",
+          "high": "Hoch"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Gewölbt (einfach)",
           "CURVE_COMPLEX": "Gewölbt (komplex)"
         }
+      },
+      "pattern_family": {
+        "name": "Mähmuster",
+        "state": {
+          "perimeter_only": "Nur Eingrenzung",
+          "stripes": "Streifen",
+          "grid": "Gitter"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Streifenmuster",
+        "state": {
+          "efficient": "Effizient",
+          "random": "Zufällig",
+          "custom": "Benutzerdefiniert"
+        }
+      },
+      "grid_pattern": {
+        "name": "Gittermuster",
+        "state": {
+          "default": "Standard",
+          "random": "Zufällig",
+          "custom": "Benutzerdefiniert"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Sprachlautstärke",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Geschwindigkeit am Poolboden"
+      },
+      "pattern_angle": {
+        "name": "Musterwinkel"
       }
     },
     "device_tracker": {
       "name": "Geräteverfolgung"
+    },
+    "image": {
+      "map": {
+        "name": "Karte"
+      }
     }
   },
   "selector": {

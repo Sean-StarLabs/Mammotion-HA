@@ -320,24 +320,24 @@ def _draw_geojson_feature(
     stroke, fill = _feature_colours(type_name, properties)
 
     if geometry_type == "Polygon":
-        for ring in geometry.get("coordinates", []):
-            polygon = [project((float(coord[0]), float(coord[1]))) for coord in ring]
-            if len(polygon) >= 3:
-                draw.polygon(polygon, fill=fill, outline=stroke)
-                draw.line([*polygon, polygon[0]], fill=stroke, width=3, joint="curve")
+        _draw_polygon_with_holes(
+            draw,
+            geometry.get("coordinates", []),
+            project,
+            stroke,
+            fill,
+        )
         if name and type_name == "area":
             _draw_label(draw, str(name), _centroid(_geometry_points(geometry)), project)
     elif geometry_type == "MultiPolygon":
         for polygon_coordinates in geometry.get("coordinates", []):
-            for ring in polygon_coordinates:
-                polygon = [
-                    project((float(coord[0]), float(coord[1]))) for coord in ring
-                ]
-                if len(polygon) >= 3:
-                    draw.polygon(polygon, fill=fill, outline=stroke)
-                    draw.line(
-                        [*polygon, polygon[0]], fill=stroke, width=3, joint="curve"
-                    )
+            _draw_polygon_with_holes(
+                draw,
+                polygon_coordinates,
+                project,
+                stroke,
+                fill,
+            )
     elif geometry_type in {"LineString", "MultiLineString"}:
         lines = (
             [geometry.get("coordinates", [])]
@@ -381,6 +381,33 @@ def _draw_geojson_feature(
         )
         if name:
             _draw_text(draw, str(name), (center[0] + 10, center[1] - 6))
+
+
+def _draw_polygon_with_holes(
+    draw: ImageDraw.ImageDraw,
+    coordinates: list[Any],
+    project,
+    stroke: tuple[int, int, int, int],
+    fill: tuple[int, int, int, int],
+) -> None:
+    """Draw a polygon while preserving its interior rings as holes."""
+    rings = [
+        [project((float(coord[0]), float(coord[1]))) for coord in ring]
+        for ring in coordinates
+        if len(ring) >= 3
+    ]
+    if not rings:
+        return
+
+    mask = Image.new("1", CANVAS_SIZE, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.polygon(rings[0], fill=1)
+    for hole in rings[1:]:
+        mask_draw.polygon(hole, fill=0)
+    draw.bitmap((0, 0), mask, fill=fill)
+
+    for ring in rings:
+        draw.line([*ring, ring[0]], fill=stroke, width=3, joint="curve")
 
 
 def _draw_mower_marker(draw: ImageDraw.ImageDraw, center: tuple[float, float]) -> None:

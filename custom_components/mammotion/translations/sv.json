@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Föredra Bluetooth framför Wi-Fi när tillgängligt",
           "movement_use_wifi": "Skicka rörelsekommandon via Wi-Fi",
           "mow_path_fetch_enabled": "Aktivera hämtning av klippväg (moln)",
-          "full_map_fetch_enabled": "Aktivera fullständig karthämtning (moln) — när av hämtas endast områdesnamn"
+          "full_map_fetch_enabled": "Aktivera fullständig karthämtning (moln) — när av hämtas endast områdesnamn",
+          "map_base_layer": "Kartbakgrund"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parkering vid vattenlinjen"
+      },
+      "auto_lighting": {
+        "name": "Automatisk belysning"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Långsam kontakt",
           "less_touch": "Mindre kontakt",
           "no_touch": "Standard",
-          "sensitive": "Känslig"
+          "sensitive": "Känslig",
+          "off": "Av",
+          "standard": "Standard"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Medium",
           "slow": "Långsam",
-          "fast": "Snabb"
+          "fast": "Snabb",
+          "low": "Låg",
+          "high": "Hög"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Böjd (enkel)",
           "CURVE_COMPLEX": "Böjd (komplex)"
         }
+      },
+      "pattern_family": {
+        "name": "Klippmönster",
+        "state": {
+          "perimeter_only": "Endast kant",
+          "stripes": "Ränder",
+          "grid": "Rutnät"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Randmönster",
+        "state": {
+          "efficient": "Effektiv",
+          "random": "Slumpmässig",
+          "custom": "Anpassad"
+        }
+      },
+      "grid_pattern": {
+        "name": "Rutnätsmönster",
+        "state": {
+          "default": "Standard",
+          "random": "Slumpmässig",
+          "custom": "Anpassad"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Röstvolym",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Hastighet på poolbotten"
+      },
+      "pattern_angle": {
+        "name": "Mönstervinkel"
       }
     },
     "device_tracker": {
       "name": "Spårning av enhet"
+    },
+    "image": {
+      "map": {
+        "name": "Karta"
+      }
     }
   },
   "selector": {

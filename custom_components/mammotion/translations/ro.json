@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Preferați Bluetooth față de Wi-Fi când este disponibil",
           "movement_use_wifi": "Trimiteți comenzi de mișcare prin Wi-Fi",
           "mow_path_fetch_enabled": "Activați descărcarea traseului de tuns",
-          "full_map_fetch_enabled": "Activați descărcarea completă a hărții (cloud) — când este oprit, se descarcă doar numele zonelor"
+          "full_map_fetch_enabled": "Activați descărcarea completă a hărții (cloud) — când este oprit, se descarcă doar numele zonelor",
+          "map_base_layer": "Fundal hartă"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parcare la linia de apă"
+      },
+      "auto_lighting": {
+        "name": "Iluminare automată"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Atingere lentă",
           "less_touch": "Mai puțin atins",
           "no_touch": "Standard",
-          "sensitive": "Sensibil"
+          "sensitive": "Sensibil",
+          "off": "Oprit",
+          "standard": "Standard"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Medie",
           "slow": "Lentă",
-          "fast": "Rapidă"
+          "fast": "Rapidă",
+          "low": "Redusă",
+          "high": "Ridicată"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Curbat (simplu)",
           "CURVE_COMPLEX": "Curbat (complex)"
         }
+      },
+      "pattern_family": {
+        "name": "Model de tundere",
+        "state": {
+          "perimeter_only": "Doar perimetru",
+          "stripes": "Benzi",
+          "grid": "Grilă"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Model cu benzi",
+        "state": {
+          "efficient": "Eficient",
+          "random": "Aleatoriu",
+          "custom": "Personalizat"
+        }
+      },
+      "grid_pattern": {
+        "name": "Model grilă",
+        "state": {
+          "default": "Implicit",
+          "random": "Aleatoriu",
+          "custom": "Personalizat"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Volum voce",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Viteza pe fundul piscinei"
+      },
+      "pattern_angle": {
+        "name": "Unghiul modelului"
       }
     },
     "device_tracker": {
       "name": "Monitorizarea dispozitivului"
+    },
+    "image": {
+      "map": {
+        "name": "Hartă"
+      }
     }
   },
   "selector": {

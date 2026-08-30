@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Bluetooth verkiezen boven Wi-Fi indien beschikbaar",
           "movement_use_wifi": "Bewegingsopdrachten via Wi-Fi verzenden",
           "mow_path_fetch_enabled": "Maaipad ophalen inschakelen",
-          "full_map_fetch_enabled": "Volledig kaart ophalen inschakelen (cloud) — wanneer uit worden alleen gebiednamen opgehaald"
+          "full_map_fetch_enabled": "Volledig kaart ophalen inschakelen (cloud) — wanneer uit worden alleen gebiednamen opgehaald",
+          "map_base_layer": "Kaartachtergrond"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Parkeren bij de waterlijn"
+      },
+      "auto_lighting": {
+        "name": "Automatische verlichting"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Langzame aanraking",
           "less_touch": "Minder aanraking",
           "no_touch": "Standaard",
-          "sensitive": "Gevoelig"
+          "sensitive": "Gevoelig",
+          "off": "Uit",
+          "standard": "Standaard"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Gemiddeld",
           "slow": "Langzaam",
-          "fast": "Snel"
+          "fast": "Snel",
+          "low": "Laag",
+          "high": "Hoog"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Gebogen (eenvoudig)",
           "CURVE_COMPLEX": "Gebogen (complex)"
         }
+      },
+      "pattern_family": {
+        "name": "Maaipatroon",
+        "state": {
+          "perimeter_only": "Alleen perimeter",
+          "stripes": "Strepen",
+          "grid": "Raster"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Strepenpatroon",
+        "state": {
+          "efficient": "Efficiënt",
+          "random": "Willekeurig",
+          "custom": "Aangepast"
+        }
+      },
+      "grid_pattern": {
+        "name": "Rasterpatroon",
+        "state": {
+          "default": "Standaard",
+          "random": "Willekeurig",
+          "custom": "Aangepast"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Spraakvolume",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Snelheid op de zwembadbodem"
+      },
+      "pattern_angle": {
+        "name": "Patroonhoek"
       }
     },
     "device_tracker": {
       "name": "Apparaat volgen"
+    },
+    "image": {
+      "map": {
+        "name": "Kaart"
+      }
     }
   },
   "selector": {

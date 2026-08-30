@@ -59,7 +59,8 @@
           "prefer_ble_over_wifi": "Préférer le Bluetooth au Wi-Fi si disponible",
           "movement_use_wifi": "Envoyer les commandes de mouvement via Wi-Fi",
           "mow_path_fetch_enabled": "Activer la récupération du chemin de tonte",
-          "full_map_fetch_enabled": "Activer la récupération complète de la carte (cloud) — désactivé, seuls les noms de zones sont récupérés"
+          "full_map_fetch_enabled": "Activer la récupération complète de la carte (cloud) — désactivé, seuls les noms de zones sont récupérés",
+          "map_base_layer": "Arrière-plan de la carte"
         }
       }
     }
@@ -462,6 +463,9 @@
       },
       "spino_waterline_parking": {
         "name": "Stationnement à la ligne d'eau"
+      },
+      "auto_lighting": {
+        "name": "Éclairage automatique"
       }
     },
     "select": {
@@ -508,7 +512,9 @@
           "slow_touch": "Toucher lent",
           "less_touch": "Moins de contact",
           "no_touch": "Standard",
-          "sensitive": "Sensible"
+          "sensitive": "Sensible",
+          "off": "Désactivé",
+          "standard": "Standard"
         }
       },
       "cutting_angle_mode": {
@@ -546,7 +552,9 @@
         "state": {
           "normal": "Moyenne",
           "slow": "Lente",
-          "fast": "Rapide"
+          "fast": "Rapide",
+          "low": "Faible",
+          "high": "Élevé"
         }
       },
       "voice_gender": {
@@ -586,6 +594,40 @@
           "CURVE_SIMPLE": "Incurvé (simple)",
           "CURVE_COMPLEX": "Incurvé (complexe)"
         }
+      },
+      "pattern_family": {
+        "name": "Motif de tonte",
+        "state": {
+          "perimeter_only": "Périmètre uniquement",
+          "stripes": "Bandes",
+          "grid": "Grille"
+        }
+      },
+      "stripes_pattern": {
+        "name": "Motif en bandes",
+        "state": {
+          "efficient": "Efficace",
+          "random": "Aléatoire",
+          "custom": "Personnalisé"
+        }
+      },
+      "grid_pattern": {
+        "name": "Motif en grille",
+        "state": {
+          "default": "Par défaut",
+          "random": "Aléatoire",
+          "custom": "Personnalisé"
+        }
+      },
+      "voice_volume_level": {
+        "name": "Volume vocal",
+        "state": {
+          "one": "1",
+          "two": "2",
+          "three": "3",
+          "four": "4",
+          "five": "5"
+        }
       }
     },
     "number": {
@@ -621,10 +663,18 @@
       },
       "spino_floor_speed": {
         "name": "Vitesse au fond de la piscine"
+      },
+      "pattern_angle": {
+        "name": "Angle du motif"
       }
     },
     "device_tracker": {
       "name": "Suivi de l'appareil"
+    },
+    "image": {
+      "map": {
+        "name": "Carte"
+      }
     }
   },
   "selector": {
