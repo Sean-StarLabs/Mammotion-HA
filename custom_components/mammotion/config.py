@@ -43,8 +43,9 @@ class MammotionConfigStore(Store):  # type: ignore[misc]
         if (legacy_data := await legacy_store.async_load()) is None:
             return None
 
-        await legacy_store.async_remove()
         self.async_update_device_data(device_name, legacy_data)
+        await self.async_flush()
+        await legacy_store.async_remove()
         return legacy_data
 
     @callback

@@ -66,19 +66,22 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         self._cached_png: bytes | None = None
         self._last_content_key: str | None = None
         self._notified_content_key: str | None = None
+        self._notified_live_key: tuple[Any, ...] | None = None
         self._last_render_time = 0.0
 
     async def async_added_to_hass(self) -> None:
         """Refresh rendered image when the mower map changes."""
         await super().async_added_to_hass()
-        self.coordinator.subscribe_map_updated(self._handle_map_update)
+        self.async_on_remove(
+            self.coordinator.subscribe_map_updated(self._handle_map_update)
+        )
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Invalidate image when live mower telemetry changes."""
-        content_key = self._current_content_key()
-        if content_key != self._notified_content_key:
-            self._notified_content_key = content_key
+        live_key = self._current_live_key()
+        if live_key != self._notified_live_key:
+            self._notified_live_key = live_key
             self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         super()._handle_coordinator_update()
 
@@ -87,6 +90,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         """Invalidate image when static map data changes."""
         self._cached_png = None
         self._notified_content_key = None
+        self._notified_live_key = None
         self._attr_image_last_updated = datetime.datetime.now(datetime.UTC)
         self.async_write_ha_state()
 
@@ -95,6 +99,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         payload = self._image_payload()
         if payload is None:
             self._notified_content_key = self._PLACEHOLDER_CONTENT_KEY
+            self._notified_live_key = self._current_live_key()
             return placeholder_png()
 
         geojson, mower_location, mower_trail, tile_provider, content_key = payload
@@ -121,15 +126,32 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         )
         self._last_content_key = content_key
         self._notified_content_key = content_key
+        self._notified_live_key = self._current_live_key()
         self._last_render_time = now
         return self._cached_png
 
-    def _current_content_key(self) -> str:
-        """Return the key for the image Home Assistant should fetch."""
-        payload = self._image_payload()
-        if payload is None:
-            return self._PLACEHOLDER_CONTENT_KEY
-        return payload[4]
+    def _current_live_key(self) -> tuple[Any, ...]:
+        """Return a cheap key for live/retained trail image updates."""
+        mower = self.coordinator.manager.get_device_by_name(
+            self.coordinator.device_name
+        )
+        if mower is None:
+            return (self._PLACEHOLDER_CONTENT_KEY,)
+
+        trail = self._native_trail_coordinates(mower)
+        last_trail_point = trail[-1] if trail else None
+        active = self._is_live_report_active(mower)
+        if not active and not trail:
+            return ("idle", self._tile_provider().key)
+
+        mower_location = self._offset_location(mower.location.device) if active else None
+        return (
+            "live" if active else "retained",
+            self._tile_provider().key,
+            len(trail),
+            self._rounded_point(last_trail_point),
+            self._rounded_location(mower_location),
+        )
 
     def _image_payload(
         self,
@@ -156,9 +178,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         if geojson is not None:
             geojson = apply_geojson_offset(geojson, offset_lat, offset_lon)
         mower_location = self._offset_location(mower.location.device)
-        mower_trail = self._offset_trail(
-            list(getattr(self.coordinator, "location_trail", []))
-        )
+        mower_trail: list[tuple[float, float]] = []
         tile_provider = self._tile_provider()
         content_key = self._content_key(
             geojson,
@@ -182,19 +202,18 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
         base_geojson = MammotionMapImage._base_geojson(
             getattr(mower.map, "generated_geojson", None)
         )
-        skip_retained_trail = bool(getattr(self.coordinator, "location_trail", []))
         feature_collections = [base_geojson]
-        if MammotionMapImage._is_live_report_active(mower):
-            feature_collections.extend(
-                (
-                    MammotionMapImage._line_geojson(
-                        getattr(mower.map, "generated_mow_progress_geojson", None),
-                        skip_trail_features=skip_retained_trail,
-                    ),
-                    MammotionMapImage._line_geojson(
-                        getattr(mower.map, "generated_dynamics_line_geojson", None),
-                        skip_trail_features=skip_retained_trail,
-                    ),
+        active = MammotionMapImage._is_live_report_active(mower)
+        if active and MammotionMapImage._has_current_native_route(mower):
+            feature_collections.append(
+                MammotionMapImage._line_geojson(
+                    getattr(mower.map, "generated_mow_progress_geojson", None),
+                )
+            )
+        if active:
+            feature_collections.append(
+                MammotionMapImage._line_geojson(
+                    getattr(mower.map, "generated_dynamics_line_geojson", None),
                 )
             )
         features: list[dict[str, Any]] = []
@@ -208,6 +227,29 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             "name": "Mammotion Map",
             "features": features,
         }
+
+    @staticmethod
+    def _native_trail_coordinates(mower: Any) -> list[tuple[float, float]]:
+        """Return device-provided dynamics-line coordinates for cache keys."""
+        geojson = getattr(mower.map, "generated_dynamics_line_geojson", None)
+        if not isinstance(geojson, dict):
+            return []
+        for feature in geojson.get("features") or []:
+            if not isinstance(feature, dict):
+                continue
+            properties = feature.get("properties") or {}
+            geometry = feature.get("geometry") or {}
+            if properties.get("type_name") != "dynamics_line":
+                continue
+            if geometry.get("type") != "LineString":
+                continue
+            coordinates = geometry.get("coordinates") or []
+            return [
+                (float(point[0]), float(point[1]))
+                for point in coordinates
+                if isinstance(point, (list, tuple)) and len(point) >= 2
+            ]
+        return []
 
     @staticmethod
     def _is_live_report_active(mower: Any) -> bool:
@@ -229,6 +271,44 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             int(WorkMode.MODE_RETURNING),
             int(WorkMode.MODE_PAUSE),
         }
+
+    @staticmethod
+    def _has_current_native_route(mower: Any) -> bool:
+        """Return whether cached path geometry matches confirmed live telemetry."""
+        try:
+            work = mower.report_data.work
+            path_hash = int(work.path_hash)
+            ub_path_hash = int(work.ub_path_hash)
+            effective_hash = (
+                path_hash
+                if path_hash not in (0, 1)
+                else ub_path_hash if ub_path_hash not in (0, 1) else 0
+            )
+            return effective_hash != 0 and mower.map.has_mow_path_for_hash(
+                effective_hash
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _rounded_point(point: tuple[float, float] | None) -> tuple[float, float] | None:
+        """Round lon/lat samples enough to avoid timestamp churn from float noise."""
+        if point is None:
+            return None
+        return (round(float(point[0]), 7), round(float(point[1]), 7))
+
+    @staticmethod
+    def _rounded_location(location: Any | None) -> tuple[float, float] | None:
+        """Return a rounded lon/lat tuple from a pymammotion location object."""
+        if location is None:
+            return None
+        try:
+            return (
+                round(float(location.longitude), 7),
+                round(float(location.latitude), 7),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def _base_geojson(geojson: dict[str, Any] | None) -> dict[str, Any] | None:

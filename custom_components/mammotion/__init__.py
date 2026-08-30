@@ -8,6 +8,7 @@ from asyncio import CancelledError
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
+import betterproto2
 from aiohttp import ClientConnectorError
 from aioesphomeapi.core import BluetoothGATTAPIError
 from bleak.exc import BleakError
@@ -62,8 +63,6 @@ from .const import (
     CONF_DEVICE_NAME,
     CONF_HAS_CLOUD_ACCOUNT,
     CONF_MAMMOTION_DATA,
-    CONF_MAMMOTION_DEVICE_LIST,
-    CONF_MAMMOTION_DEVICE_RECORDS,
     CONF_MAMMOTION_JWT_INFO,
     CONF_MAMMOTION_MQTT,
     CONF_MOW_PATH_FETCH_ENABLED,
@@ -127,26 +126,51 @@ _LUBA_SUB_MESSAGES = (
     "ctrl",
 )
 _ORIGINAL_MOWER_STATE_REDUCER_APPLY = MowerStateReducer.apply
-_ORIGINAL_DEVICE_HANDLE_START_DYNAMICS_LINE_LOOP = (
-    DeviceHandle._start_dynamics_line_loop
-)
+_ORIGINAL_MOWER_STATE_REDUCER_UPDATE_NAV = MowerStateReducer._update_nav_data
+_ORIGINAL_START_MOW_PATH_SAGA = MammotionClient.start_mow_path_saga
 
 
-def _disable_dynamics_line_loop(handle: DeviceHandle) -> None:
-    """Disable pymammotion's direct dynamics-line polling.
-
-    The integration currently keeps live trails from report locations.  The
-    library loop uses the common-data saga every 10 seconds over BLE while a
-    mower is active; on Yuka this can fail repeatedly and monopolise the
-    command queue, blocking real controls.
-    """
+def _disable_automatic_dynamics_line_loop(handle: DeviceHandle) -> None:
+    """Keep native-path probes explicit until support is confirmed."""
     LOGGER.debug(
-        "Skipping pymammotion dynamics-line loop for %s; HA location trail is used",
+        "Skipping automatic dynamics-line polling for %s; use an explicit fetch",
         handle.device_name,
     )
 
 
-DeviceHandle._start_dynamics_line_loop = _disable_dynamics_line_loop
+DeviceHandle._start_dynamics_line_loop = _disable_automatic_dynamics_line_loop
+
+
+def _ignore_task_ack_state(
+    self: MowerStateReducer,
+    device: MowingDevice,
+    message: LubaMsg,
+) -> None:
+    """Do not treat a task-control acknowledgement as reported mower state."""
+    try:
+        field, _ = betterproto2.which_one_of(message.nav, "SubNavMsg")
+    except (AttributeError, TypeError, ValueError):
+        field = None
+    if field == "todev_taskctrl_ack":
+        return
+    _ORIGINAL_MOWER_STATE_REDUCER_UPDATE_NAV(self, device, message)
+
+
+async def _respect_disabled_mow_path_fetch(
+    self: MammotionClient,
+    device_name: str,
+    *args: Any,
+    **kwargs: Any,
+) -> None:
+    """Keep optional planned-path downloads disabled on every transport."""
+    handle = self.mower(device_name)
+    if handle is not None and not handle.mow_path_fetch_enabled:
+        return
+    await _ORIGINAL_START_MOW_PATH_SAGA(self, device_name, *args, **kwargs)
+
+
+MowerStateReducer._update_nav_data = _ignore_task_ack_state  # type: ignore[method-assign]
+MammotionClient.start_mow_path_saga = _respect_disabled_mow_path_fetch  # type: ignore[method-assign]
 
 
 def _luba_submessage_names(message: LubaMsg) -> list[str]:
@@ -248,18 +272,6 @@ def _has_ble_devices(entry: MammotionConfigEntry) -> bool:
     return bool(entry.data.get(CONF_BLE_DEVICES))
 
 
-def _has_cached_device_inventory(entry: MammotionConfigEntry) -> bool:
-    """Return True when cached cloud device records are available."""
-    return any(
-        entry.data.get(key)
-        for key in (
-            CONF_DEVICE_DATA,
-            CONF_MAMMOTION_DEVICE_LIST,
-            CONF_MAMMOTION_DEVICE_RECORDS,
-        )
-    )
-
-
 async def _async_attempt_login(
     hass: HomeAssistant,
     entry: MammotionConfigEntry,
@@ -279,18 +291,12 @@ async def _async_attempt_login(
     cached = _load_cached_credentials(entry)
     try:
         if cached:
-            check_for_new_devices = not _has_cached_device_inventory(entry)
-            if not check_for_new_devices:
-                LOGGER.debug(
-                    "Restoring Mammotion cloud credentials from cache without "
-                    "new-device discovery"
-                )
             await mammotion.restore_credentials(
                 account,
                 password,
                 cached,
                 session,
-                check_for_new_devices=check_for_new_devices,
+                check_for_new_devices=True,
             )
         else:
             await mammotion.login_and_initiate_cloud(account, password, session)
@@ -468,7 +474,7 @@ def _register_ble_reconnect_callback(
         bluetooth.async_register_callback(
             hass,
             _ble_seen,
-            BluetoothCallbackMatcher(address=ble_address.upper()),
+            BluetoothCallbackMatcher(address=ble_address.upper(), connectable=True),
             BluetoothScanningMode.ACTIVE,
         )
     )

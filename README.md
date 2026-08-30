@@ -77,8 +77,8 @@ Imagery)** under the integration's configure options to use satellite imagery
 without an API key. Map tiles are cached locally and include the provider's
 attribution in the rendered image.
 
-The current mowing trail is retained after the task finishes and remains visible
-until the next task starts.
+While mowing, the map can show native route progress reported by the mower. The
+integration does not synthesize trails from sampled GPS positions.
 
 ## Map Position Offset
 

@@ -20,7 +20,10 @@ from .entity import MammotionBaseSpinoEntity
 # The fan-speed picker maps to the Spino cleaning work modes. OFF (no mode
 # active; as a command it is the dock action exposed via return_to_base) and
 # UNKNOWN are excluded — neither is a selectable cleaning speed.
-_FAN_SPEED_EXCLUDED = {SpinoWorkMode.OFF, SpinoWorkMode.UNKNOWN}
+_SPINO_DOCK_MODE = getattr(SpinoWorkMode, "OFF", None) or getattr(
+    SpinoWorkMode, "RECHARGE"
+)
+_FAN_SPEED_EXCLUDED = {_SPINO_DOCK_MODE, SpinoWorkMode.UNKNOWN}
 FAN_SPEED_MODES = [
     mode.name for mode in SpinoWorkMode if mode not in _FAN_SPEED_EXCLUDED
 ]
@@ -88,7 +91,7 @@ class MammotionSpinoVacuumEntity(MammotionBaseSpinoEntity, StateVacuumEntity):
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Send the cleaner back to recharge."""
-        await self.coordinator.async_set_work_mode(SpinoWorkMode.RECHARGE.value)
+        await self.coordinator.async_set_work_mode(_SPINO_DOCK_MODE.value)
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
         """Switch the cleaning work mode."""

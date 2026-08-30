@@ -27,8 +27,8 @@ from .coordinator import (
 
 def _has_restored_online_state(coordinator: MammotionBaseUpdateCoordinator[Any]) -> bool:
     device = coordinator.manager.get_device_by_name(coordinator.device_name)
-    if device is not None and device.enabled and device.online:
-        return True
+    if device is not None:
+        return bool(device.enabled and device.online)
     return getattr(coordinator.device, "status", None) in (1, "1", True)
 
 

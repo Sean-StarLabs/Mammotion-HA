@@ -439,8 +439,13 @@ def async_setup_services(hass: HomeAssistant) -> None:  # noqa: C901
         coordinator = mower.reporting_coordinator
         device_type = DeviceType.value_of_str(coordinator.device_name)
         firmware = coordinator.data.device_firmwares.main_controller
-        if device_type.is_support_dynamics_line(firmware):
-            geojson = coordinator.data.map.generated_dynamics_line_geojson
+        dynamics_line = coordinator.data.map.generated_dynamics_line_geojson
+        if (
+            device_type.is_support_dynamics_line(firmware)
+            and isinstance(dynamics_line, dict)
+            and dynamics_line.get("features")
+        ):
+            geojson = dynamics_line
         else:
             geojson = coordinator.data.map.generated_mow_progress_geojson
         return apply_geojson_offset(
@@ -485,6 +490,17 @@ def async_setup_services(hass: HomeAssistant) -> None:  # noqa: C901
                     "area": map_dict.get("area", {}),
                     "svg": map_dict.get("svg", {}),
                     "area_name": map_dict.get("area_name", []),
+                    "current_mow_path": map_dict.get("current_mow_path", {}),
+                    "dynamics_line": map_dict.get("dynamics_line", []),
+                    "generated_mow_path_geojson": map_dict.get(
+                        "generated_mow_path_geojson", {}
+                    ),
+                    "generated_mow_progress_geojson": map_dict.get(
+                        "generated_mow_progress_geojson", {}
+                    ),
+                    "generated_dynamics_line_geojson": map_dict.get(
+                        "generated_dynamics_line_geojson", {}
+                    ),
                 }
             ),
         )

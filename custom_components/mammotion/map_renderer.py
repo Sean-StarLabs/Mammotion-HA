@@ -30,8 +30,9 @@ OSM_TILE_SIZE = 256
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 OSM_USER_AGENT = "HomeAssistant-Mammotion-Map/1.0"
 TRAIL_RENDER_MIN_DISTANCE_METERS = 0.8
-TRAIL_RENDER_MAX_SEGMENT_METERS = 40.0
-TRAIL_RENDER_SIMPLIFY_METERS = 1.5
+TRAIL_RENDER_MAX_SEGMENT_METERS = 25.0
+TRAIL_RENDER_SPIKE_MIN_METERS = 4.0
+TRAIL_RENDER_SIMPLIFY_METERS = 2.0
 TRAIL_RENDER_SMOOTHING_PASSES = 2
 TRAIL_RENDER_DENOISE_WINDOW = 5
 TRAIL_RECENT_POINTS = 40
@@ -533,8 +534,11 @@ def _geo_trail_segments(
         if distance < TRAIL_RENDER_MIN_DISTANCE_METERS:
             continue
 
+        next_point = points[index + 1] if index + 1 < len(points) else None
+        if _is_geo_spike(current[-1], point, next_point):
+            continue
+
         if distance > TRAIL_RENDER_MAX_SEGMENT_METERS:
-            next_point = points[index + 1] if index + 1 < len(points) else None
             if (
                 next_point is not None
                 and _geo_distance_meters(current[-1], next_point)
@@ -552,6 +556,21 @@ def _geo_trail_segments(
         segments.append(_prepare_geo_segment(current))
 
     return segments
+
+
+def _is_geo_spike(
+    previous: tuple[float, float],
+    point: tuple[float, float],
+    next_point: tuple[float, float] | None,
+) -> bool:
+    """Return True for a single GPS sample that darts away then immediately returns."""
+    if next_point is None:
+        return False
+    distance = _geo_distance_meters(previous, point)
+    if distance < TRAIL_RENDER_SPIKE_MIN_METERS:
+        return False
+    next_distance = _geo_distance_meters(previous, next_point)
+    return next_distance <= max(TRAIL_RENDER_MIN_DISTANCE_METERS * 2, distance * 0.35)
 
 
 def _prepare_geo_segment(

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from copy import copy
 from datetime import UTC, datetime, time, timedelta
+from time import monotonic
 from typing import Any, cast
 
+import betterproto2
 import voluptuous as vol
 from homeassistant.components.lawn_mower import DOMAIN as LAWN_MOWER_DOMAIN
 from homeassistant.components.lawn_mower import (
@@ -14,7 +17,7 @@ from homeassistant.components.lawn_mower import (
     LawnMowerEntity,
     LawnMowerEntityFeature,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -36,6 +39,10 @@ SERVICE_START_STOP_BLADES = "start_stop_blades"
 SERVICE_SET_NON_WORK_HOURS = "set_non_work_hours"
 SERVICE_RESET_BLADE_TIME = "reset_blade_time"
 SERVICE_SET_BLADE_WARNING_TIME = "set_blade_warning_time"
+
+
+class _CommandPreempted(Exception):
+    """Raised internally when a safety action supersedes a pending start."""
 
 START_MOW_SCHEMA = {
     vol.Optional("modify", default=False): cv.boolean,
@@ -194,6 +201,50 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         """Initialize the Lawn Mower."""
         super().__init__(coordinator, "mower")
         self._attr_name = None  # main feature of device
+        self._command_lock = asyncio.Lock()
+        self._active_start_cancel: asyncio.Event | None = None
+        self._start_cancel_events: set[asyncio.Event] = set()
+        self._start_dispatched = False
+
+    def _preempt_active_start(self) -> None:
+        """Wake a start operation so a safety action can acquire the lock."""
+        for cancel_event in self._start_cancel_events:
+            cancel_event.set()
+
+    async def _async_wait_unless_preempted(self, awaitable: Any) -> Any:
+        """Await work unless the active start is superseded by a safety action."""
+        cancel_event = self._active_start_cancel
+        if cancel_event is None:
+            return await awaitable
+        if cancel_event.is_set() and not self._start_dispatched:
+            close = getattr(awaitable, "close", None)
+            if close is not None:
+                close()
+            raise _CommandPreempted
+
+        work_task = asyncio.create_task(awaitable)
+        cancel_task = asyncio.create_task(cancel_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {work_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if work_task in done:
+                return await work_task
+            if cancel_task in done and not self._start_dispatched:
+                work_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await work_task
+                raise _CommandPreempted
+            return await work_task
+        except asyncio.CancelledError:
+            work_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await work_task
+            raise
+        finally:
+            cancel_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancel_task
 
     @property
     def rpt_dev_status(self) -> DeviceData:
@@ -239,53 +290,84 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             return LawnMowerActivity.DOCKED
         return None
 
-    async def _async_wait_for_modes(
-        self,
-        modes: set[WorkMode],
-        timeout: float = 10.0,
-        *,
-        require_update: bool = False,
-    ) -> bool:
-        """Wait for the report stream to show one of the expected work modes."""
-        if not require_update and self.rpt_dev_status.sys_status in modes:
-            return True
-
-        mode_seen = asyncio.Event()
-
-        @callback
-        def _wake_on_mode() -> None:
-            if self.rpt_dev_status.sys_status in modes:
-                mode_seen.set()
-
-        remove_listener = self.coordinator.async_add_listener(_wake_on_mode)
-        try:
-            await self.coordinator.async_start_report_stream(
-                duration_ms=int(timeout * 1000)
-            )
-            if not require_update and self.rpt_dev_status.sys_status in modes:
-                return True
-            await asyncio.wait_for(mode_seen.wait(), timeout)
-        except TimeoutError:
-            if require_update:
-                return False
-            return self.rpt_dev_status.sys_status in modes
-        finally:
-            remove_listener()
-
-        return True
-
     async def _async_start_job_and_verify(self, trans_key: str) -> None:
         """Start the planned job and verify the mower actually begins work."""
-        command_acked = await self.coordinator.async_send_command("start_job")
-        if not command_acked:
-            LOGGER.debug(
-                "Start job for %s did not return an immediate ack; waiting for report stream",
-                self.coordinator.device_name,
+        await self._async_task_control(
+            "start_job",
+            action=1,
+            expected_modes={WorkMode.MODE_WORKING},
+            trans_key=trans_key,
+            timeout=90,
+        )
+
+    async def _async_task_control(
+        self,
+        command: str,
+        *,
+        action: int,
+        expected_modes: set[WorkMode],
+        trans_key: str,
+        timeout: float = 15.0,
+    ) -> None:
+        """Send one task command and verify its ACK and reported final state."""
+        await self.coordinator.async_start_report_stream(
+            duration_ms=int(timeout * 1000)
+        )
+        report_token = self.coordinator.report_data_token
+        before_send = None
+        if command in {"start_job", "resume_execute_task"}:
+            # Once the outbound call is entered, the mower may begin later even if
+            # its ACK or current report still says READY. Keep the transaction
+            # accountable until fresh telemetry arrives; a queued safety action
+            # then runs.
+
+            def _cancel_or_mark_dispatched() -> None:
+                if self._start_dispatched:
+                    return
+                if (
+                    self._active_start_cancel is not None
+                    and self._active_start_cancel.is_set()
+                ):
+                    raise _CommandPreempted
+                self._start_dispatched = True
+
+            before_send = _cancel_or_mark_dispatched
+        response = await self.coordinator.async_send_and_wait(
+            command,
+            "todev_taskctrl_ack",
+            retry_on_timeout=False,
+            before_send=before_send,
+        )
+        deadline = monotonic() + timeout
+        ack = None
+        if response is not None:
+            try:
+                field, ack = betterproto2.which_one_of(response.nav, "SubNavMsg")
+            except (AttributeError, TypeError, ValueError):
+                field = None
+            if field != "todev_taskctrl_ack":
+                ack = None
+        if ack is not None and (int(ack.action) != action or int(ack.result) != 0):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key=trans_key
             )
-        if await self._async_wait_for_modes(
-            {WorkMode.MODE_WORKING}, timeout=30, require_update=True
-        ):
-            return
+
+        while True:
+            latest_token = self.coordinator.report_data_token
+            if (
+                latest_token != report_token
+                and self.rpt_dev_status.sys_status in expected_modes
+            ):
+                return
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            report_token = latest_token
+            if not await self.coordinator.async_wait_for_report_data(
+                since=report_token, timeout=remaining
+            ):
+                break
+
         await self.coordinator.async_request_report_snapshot()
         error = get_mammotion_error_details(
             self.coordinator.data, self.hass.config.language
@@ -301,21 +383,36 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             raise HomeAssistantError(
                 f"Mammotion {classification.value} error {error.code}: {error.message}"
             )
-        if not command_acked:
-            LOGGER.warning(
-                "Start job for %s returned no ack and no working state was observed",
-                self.coordinator.device_name,
-            )
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key=trans_key
-            )
         raise HomeAssistantError(translation_domain=DOMAIN, translation_key=trans_key)
 
     async def async_start_mowing(self, **kwargs: Any) -> None:
         """Start mowing."""
+        cancel_event = asyncio.Event()
+        self._start_cancel_events.add(cancel_event)
+        try:
+            await self.coordinator.async_interrupt_sagas()
+            async with self._command_lock:
+                self._active_start_cancel = cancel_event
+                self._start_dispatched = False
+                await self._async_wait_unless_preempted(
+                    self._async_start_mowing_locked(**kwargs)
+                )
+        except _CommandPreempted:
+            return
+        finally:
+            self._start_cancel_events.discard(cancel_event)
+            if self._active_start_cancel is cancel_event:
+                self._active_start_cancel = None
+                self._start_dispatched = False
+
+    async def _async_start_mowing_locked(self, **kwargs: Any) -> None:
+        """Start mowing while holding the per-mower command lock."""
         trans_key = "pause_failed"
 
-        await self.coordinator.async_ensure_fresh_state()
+        if not await self.coordinator.async_ensure_fresh_report_data():
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="device_not_ready"
+            )
 
         explicit_route = bool(kwargs)
         if kwargs:
@@ -367,7 +464,7 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                     return
 
                 if explicit_route:
-                    await self.async_cancel()
+                    await self._async_cancel_locked(refresh_state=False)
                     await self.coordinator.async_request_report_snapshot()
                     for _ in range(5):
                         mode = self.rpt_dev_status.sys_status
@@ -385,15 +482,17 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
                 if mode == WorkMode.MODE_RETURNING:
                     trans_key = "dock_cancel_failed"
-                    await self.coordinator.async_send_and_wait(
-                        "cancel_return_to_dock", "todev_taskctrl_ack"
+                    await self._async_task_control(
+                        "cancel_return_to_dock",
+                        action=12,
+                        expected_modes={WorkMode.MODE_PAUSE, WorkMode.MODE_READY},
+                        trans_key=trans_key,
+                        timeout=30,
                     )
-                    await self.coordinator.async_request_report_snapshot()
                     mode = self.rpt_dev_status.sys_status
                 if mode == WorkMode.MODE_PAUSE:
                     trans_key = "resume_failed"
                     if breakpoint_info != 0:
-                        await self.coordinator.async_send_command("resume_execute_task")
                         response = await self.coordinator.async_send_and_wait(
                             "query_generate_route_information", "bidire_reqconver_path"
                         )
@@ -403,6 +502,13 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                             raise HomeAssistantError(
                                 translation_domain=DOMAIN, translation_key=trans_key
                             )
+                        await self._async_task_control(
+                            "resume_execute_task",
+                            action=3,
+                            expected_modes={WorkMode.MODE_WORKING},
+                            trans_key=trans_key,
+                            timeout=60,
+                        )
                 if mode in (WorkMode.MODE_READY, WorkMode.MODE_INITIALIZATION):
                     trans_key = "start_failed"
                     if breakpoint_info != 0:
@@ -436,9 +542,19 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
     async def async_dock(self) -> None:
         """Start docking."""
+        self._preempt_active_start()
+        await self.coordinator.async_interrupt_sagas()
+        async with self._command_lock:
+            await self._async_dock_locked()
+
+    async def _async_dock_locked(self) -> None:
+        """Start docking while holding the per-mower command lock."""
         trans_key = "pause_failed"
 
-        await self.coordinator.async_start_report_stream()
+        if not await self.coordinator.async_ensure_fresh_report_data():
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="device_not_ready"
+            )
         charge_state = self.rpt_dev_status.charge_state
         mode = self.rpt_dev_status.sys_status
         if mode is None:
@@ -455,14 +571,24 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             try:
                 if mode == WorkMode.MODE_WORKING:
                     trans_key = "pause_failed"
-                    await self.coordinator.async_send_command("pause_execute_task")
+                    await self._async_task_control(
+                        "pause_execute_task",
+                        action=2,
+                        expected_modes={WorkMode.MODE_PAUSE},
+                        trans_key=trans_key,
+                        timeout=20,
+                    )
 
                 if mode == WorkMode.MODE_RETURNING:
-                    trans_key = "dock_cancel_failed"
-                    await self.coordinator.async_send_command("cancel_return_to_dock")
-                else:
-                    trans_key = "dock_failed"
-                    await self.coordinator.async_send_command("return_to_dock")
+                    return
+                trans_key = "dock_failed"
+                await self._async_task_control(
+                    "return_to_dock",
+                    action=5,
+                    expected_modes={WorkMode.MODE_RETURNING},
+                    trans_key=trans_key,
+                    timeout=30,
+                )
             except COMMAND_EXCEPTIONS as exc:
                 raise HomeAssistantError(
                     translation_domain=DOMAIN, translation_key=trans_key
@@ -472,9 +598,19 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
     async def async_pause(self) -> None:
         """Pause mower."""
+        self._preempt_active_start()
+        await self.coordinator.async_interrupt_sagas()
+        async with self._command_lock:
+            await self._async_pause_locked()
+
+    async def _async_pause_locked(self) -> None:
+        """Pause the mower while holding the per-mower command lock."""
         trans_key = "pause_failed"
 
-        await self.coordinator.async_ensure_fresh_state()
+        if not await self.coordinator.async_ensure_fresh_report_data():
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="device_not_ready"
+            )
         mode = self.rpt_dev_status.sys_status
         if mode is None:
             raise HomeAssistantError(
@@ -488,10 +624,22 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             try:
                 if mode == WorkMode.MODE_WORKING:
                     trans_key = "pause_failed"
-                    await self.coordinator.async_send_command("pause_execute_task")
+                    await self._async_task_control(
+                        "pause_execute_task",
+                        action=2,
+                        expected_modes={WorkMode.MODE_PAUSE},
+                        trans_key=trans_key,
+                        timeout=20,
+                    )
                 if mode == WorkMode.MODE_RETURNING:
                     trans_key = "dock_cancel_failed"
-                    await self.coordinator.async_send_command("cancel_return_to_dock")
+                    await self._async_task_control(
+                        "cancel_return_to_dock",
+                        action=12,
+                        expected_modes={WorkMode.MODE_PAUSE, WorkMode.MODE_READY},
+                        trans_key=trans_key,
+                        timeout=30,
+                    )
             except COMMAND_EXCEPTIONS as exc:
                 raise HomeAssistantError(
                     translation_domain=DOMAIN, translation_key=trans_key
@@ -501,9 +649,19 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
     async def async_cancel(self) -> None:
         """Cancel Job."""
+        self._preempt_active_start()
+        await self.coordinator.async_interrupt_sagas()
+        async with self._command_lock:
+            await self._async_cancel_locked()
+
+    async def _async_cancel_locked(self, *, refresh_state: bool = True) -> None:
+        """Cancel the job while holding the per-mower command lock."""
         trans_key = "pause_failed"
 
-        await self.coordinator.async_ensure_fresh_state()
+        if refresh_state and not await self.coordinator.async_ensure_fresh_report_data():
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="device_not_ready"
+            )
         mode = self.rpt_dev_status.sys_status
         if mode is None:
             raise HomeAssistantError(
@@ -519,18 +677,33 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                 if mode != WorkMode.MODE_PAUSE:
                     if mode == WorkMode.MODE_WORKING:
                         trans_key = "pause_failed"
-                        await self.coordinator.async_send_command("pause_execute_task")
-                    if mode == WorkMode.MODE_RETURNING:
-                        trans_key = "dock_failed"
-                        await self.coordinator.async_send_command(
-                            "cancel_return_to_dock"
+                        await self._async_task_control(
+                            "pause_execute_task",
+                            action=2,
+                            expected_modes={WorkMode.MODE_PAUSE},
+                            trans_key=trans_key,
+                            timeout=20,
                         )
-                    await self.coordinator.async_request_report_snapshot()
+                    if mode == WorkMode.MODE_RETURNING:
+                        trans_key = "dock_cancel_failed"
+                        await self._async_task_control(
+                            "cancel_return_to_dock",
+                            action=12,
+                            expected_modes={WorkMode.MODE_PAUSE, WorkMode.MODE_READY},
+                            trans_key=trans_key,
+                            timeout=30,
+                        )
                     mode = self.rpt_dev_status.sys_status
 
                 if mode == WorkMode.MODE_PAUSE:
-                    trans_key = "pause_failed"
-                    await self.coordinator.async_send_command("cancel_job")
+                    trans_key = "command_failed"
+                    await self._async_task_control(
+                        "cancel_job",
+                        action=4,
+                        expected_modes={WorkMode.MODE_READY},
+                        trans_key=trans_key,
+                        timeout=30,
+                    )
 
             except COMMAND_EXCEPTIONS as exc:
                 raise HomeAssistantError(

@@ -584,13 +584,21 @@ def async_add_area_entities(
 
     computed = coordinator.data.map.computed_areas or []
     map_area_hashes: set[int] = {
-        int(k) for k in coordinator.data.map.area if str(k).lstrip("-").isdigit()
+        area_id
+        for k in coordinator.data.map.area
+        if str(k).lstrip("-").isdigit() and (area_id := int(k)) != 0
     }
     area_names_by_hash = _active_named_areas(coordinator, map_area_hashes)
     area_names = {name.lower() for name in area_names_by_hash.values()}
     for area in computed:
-        area_name = str(getattr(area, "name", "") or "").strip()
-        if not area_name or _is_generic_area_name(area_name, area.hash):
+        area_name = _display_area_name(
+            area.hash,
+            str(getattr(area, "name", "") or "").strip(),
+        )
+        if (
+            area.hash in area_names_by_hash
+            and _is_generic_area_name(area_name, area.hash)
+        ):
             continue
         if map_area_hashes and area.hash not in map_area_hashes:
             if area_name.lower() in area_names:
@@ -598,6 +606,8 @@ def async_add_area_entities(
         area_names_by_hash[area.hash] = area_name
         area_names.add(area_name.lower())
     area_names_by_hash.update(_fallback_named_areas(coordinator, area_names_by_hash))
+    for area_id in sorted(map_area_hashes):
+        area_names_by_hash.setdefault(area_id, _display_area_name(area_id, ""))
     all_current_areas = set(area_names_by_hash)
     if map_area_hashes and not all_current_areas:
         return
@@ -712,11 +722,16 @@ def async_add_area_entities(
         async_add_entities(switch_entities)
 
 
-def _area_entity_key(area_id: int, name: str) -> str:
-    """Return a stable key for named areas and hash key for unnamed areas."""
-    if _is_generic_area_name(name, area_id):
-        return f"{area_id}"
-    return f"area_{slugify(name)}"
+def _area_entity_key(area_id: int, _name: str) -> str:
+    """Return a stable key for an area entity."""
+    return f"{area_id}"
+
+
+def _display_area_name(area_id: int, name: str) -> str:
+    """Return a user-facing name for an area, preserving real device names."""
+    if not name or _is_generic_area_name(name, area_id):
+        return f"area {area_id}"
+    return name
 
 
 def _active_named_areas(
@@ -836,8 +851,8 @@ def _async_clean_stale_area_registry_entries(
 ) -> None:
     """Remove area entity registry entries whose hashes are no longer on the device.
 
-    Older area entity unique_ids used the area hash directly. Named areas now use
-    a stable name key, so both old hash entries and old name entries are cleaned.
+    Older named area entity unique IDs used the mutable area name, so both current
+    hash entries and old name entries are cleaned.
     """
     registry = er.async_get(coordinator.hass)
     prefix = f"{coordinator.unique_name}_"

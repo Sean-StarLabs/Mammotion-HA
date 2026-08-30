@@ -59,6 +59,14 @@ from .yuka import (
 )
 
 
+_SPINO_DOCK_MODE = getattr(SpinoWorkMode, "OFF", None) or getattr(
+    SpinoWorkMode, "RECHARGE", None
+)
+_SPINO_NON_START_MODES = {
+    mode for mode in (SpinoWorkMode.UNKNOWN, _SPINO_DOCK_MODE) if mode is not None
+}
+
+
 @dataclass(frozen=True, kw_only=True)
 class MammotionConfigSelectEntityDescription(SelectEntityDescription):
     """Describes Mammotion select entity."""
@@ -104,7 +112,7 @@ SPINO_SELECT_ENTITIES: tuple[MammotionSpinoSelectEntityDescription, ...] = (
         options=[
             mode.name
             for mode in SpinoWorkMode
-            if mode not in (SpinoWorkMode.UNKNOWN, SpinoWorkMode.OFF)
+            if mode not in _SPINO_NON_START_MODES
         ],
         current_fn=lambda spino_data: spino_data.pool_state.work_mode.name,
         set_fn=lambda coordinator, value: coordinator.async_set_work_mode(

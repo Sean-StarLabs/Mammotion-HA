@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import betterproto2
 import contextlib
 import dataclasses
 import datetime
 import json
-import math
 import secrets
 import time
 from abc import abstractmethod
@@ -16,6 +14,7 @@ from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
+import betterproto2
 from habluetooth import BluetoothScanningMode
 from habluetooth.models import BluetoothServiceInfoBleak
 from homeassistant.components import bluetooth
@@ -30,7 +29,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.debounce import Debouncer
-from homeassistant.helpers.event import async_call_later, async_track_time_interval
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from mashumaro.exceptions import InvalidFieldValue
 from pymammotion.aliyun.exceptions import (
@@ -106,16 +105,11 @@ if TYPE_CHECKING:
 MAINTENANCE_INTERVAL = timedelta(minutes=60)
 DEFAULT_INTERVAL = timedelta(minutes=30)
 REPORT_INTERVAL = timedelta(minutes=5)
-DYNAMICS_LINE_INTERVAL = timedelta(seconds=10)
 ACTIVE_REPORT_INTERVAL = timedelta(minutes=1)
 DEVICE_VERSION_INTERVAL = timedelta(weeks=1)
 MAP_INTERVAL = timedelta(minutes=60)
 RTK_INTERVAL = timedelta(hours=5)
 SPINO_INTERVAL = timedelta(weeks=1)
-LOCATION_TRAIL_MAX_POINTS = 5000
-LOCATION_TRAIL_MIN_DISTANCE_METERS = 0.25
-LOCATION_TRAIL_SAVE_DELAY_SECONDS = 30
-LOCATION_TRAIL_STORE_VERSION = 1
 DYNAMICS_LINE_BACKOFF_SECONDS = 300
 SETUP_READ_TIMEOUT_SECONDS = 15
 DYNAMICS_LINE_FETCH_ENABLED = False
@@ -124,20 +118,6 @@ LIVE_REPORT_MODES = {
     int(WorkMode.MODE_PAUSE),
     int(WorkMode.MODE_RETURNING),
 }
-EMPTY_GEOJSON = {"type": "FeatureCollection", "features": []}
-
-
-def _distance_meters(first: tuple[float, float], second: tuple[float, float]) -> float:
-    """Return the rough distance between two lon/lat points in metres."""
-    first_lon, first_lat = first
-    second_lon, second_lat = second
-    mean_lat = math.radians((first_lat + second_lat) / 2)
-    metres_per_lat = 111_111.0
-    metres_per_lon = 111_111.0 * max(math.cos(mean_lat), 0.01)
-    return math.hypot(
-        (second_lon - first_lon) * metres_per_lon,
-        (second_lat - first_lat) * metres_per_lat,
-    )
 
 # Possible states for ``MammotionReportUpdateCoordinator.map_sync_status`` and
 # the ``map_sync_status`` diagnostic ENUM sensor that surfaces it.
@@ -199,8 +179,6 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         self._subscriptions: list[Subscription] = []
         self.map_offset_lat: float = 0.0
         self.map_offset_lon: float = 0.0
-        self.location_trail: list[tuple[float, float]] = []
-        self._location_trail_active = False
         self._bluetooth_enabled: bool = True
         self._cloud_enabled: bool = True
         self._store: MammotionConfigStore = async_get_store(hass, config_entry)
@@ -491,6 +469,8 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         expected_field: str,
         *,
         prefer_ble: bool | None = None,
+        retry_on_timeout: bool = True,
+        before_send: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> Any | None:
         """Send a command and wait for response with standard exception handling.
@@ -509,6 +489,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
                 command,
                 expected_field,
                 prefer_ble=prefer_ble,
+                before_send=before_send,
                 **kwargs,
             )
 
@@ -518,7 +499,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
             try:
                 response = await _send(preferred_ble)
             except CommandTimeoutError:
-                if not preferred_ble:
+                if not preferred_ble or not retry_on_timeout:
                     raise
                 LOGGER.warning(
                     "Command %s for %s timed out over preferred BLE; retrying via MQTT",
@@ -1178,6 +1159,60 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         """Fire a one-shot snapshot if device state is older than 2 minutes."""
         await self.manager.ensure_fresh_state(self.device_name, max_age_s=120.0)
 
+    async def async_ensure_fresh_report_data(self) -> bool:
+        """Wait until command decisions can use recent device telemetry."""
+        ensure_fresh = getattr(self.manager, "ensure_fresh_report_data", None)
+        if ensure_fresh is None:
+            # Compatibility for released pymammotion versions. Remove once the public
+            # awaited freshness API is in the minimum supported library version.
+            handle = self.manager.mower(self.device_name)
+            if handle is None:
+                return False
+            if handle.last_report_data_at and (
+                time.monotonic() - handle.last_report_data_at <= 5.0
+            ):
+                return True
+            before = handle.last_report_data_at
+            await self.manager.request_reports(self.device_name, count=1)
+            return await handle._wait_for_report_data(10.0, since=before)  # noqa: SLF001
+        return await ensure_fresh(self.device_name, max_age_s=5.0, timeout=10.0)
+
+    async def async_interrupt_sagas(self) -> None:
+        """Give an immediate user command priority over map-transfer work."""
+        interrupt = getattr(self.manager, "interrupt_sagas", None)
+        if interrupt is not None:
+            await interrupt(self.device_name)
+            return
+        handle = self.manager.mower(self.device_name)
+        queue_interrupt = getattr(
+            getattr(handle, "queue", None), "interrupt_sagas", None
+        )
+        if queue_interrupt is not None:
+            await queue_interrupt()
+
+    @property
+    def report_data_token(self) -> float:
+        """Return the generation token for the latest telemetry report."""
+        get_token = getattr(self.manager, "report_data_token", None)
+        if get_token is not None:
+            return float(get_token(self.device_name))
+        handle = self.manager.mower(self.device_name)
+        return float(handle.last_report_data_at) if handle is not None else 0.0
+
+    async def async_wait_for_report_data(
+        self, *, since: float, timeout: float
+    ) -> bool:
+        """Wait for telemetry newer than *since*."""
+        wait_for_report = getattr(self.manager, "wait_for_report_data", None)
+        if wait_for_report is not None:
+            return await wait_for_report(
+                self.device_name, since=since, timeout=timeout
+            )
+        handle = self.manager.mower(self.device_name)
+        if handle is None:
+            return False
+        return await handle._wait_for_report_data(timeout, since=since)  # noqa: SLF001
+
     async def send_svg_command(self, svg_message: SvgMessage) -> int | None:
         """Send an SVG tile to the device using the multi-frame saga protocol.
 
@@ -1632,7 +1667,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
 
         return _wrapper
 
-    def subscribe_map_updated(self, handler: Callable[[], None]) -> None:
+    def subscribe_map_updated(self, handler: Callable[[], None]) -> CALLBACK_TYPE:
         """Subscribe *handler* to map-updated events from the device handle.
 
         Fires only when ``toapp_all_hash_name`` is received or a ``MapFetchSaga``
@@ -1641,13 +1676,22 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         """
         handle = self.manager.mower(self.device_name)
         if handle is None:
-            return
+            return lambda: None
 
         async def _on_map_updated() -> None:
             if not self.hass.is_stopping:
                 handler()
 
-        self._subscriptions.append(handle.subscribe_map_updated(_on_map_updated))
+        subscription = handle.subscribe_map_updated(_on_map_updated)
+        self._subscriptions.append(subscription)
+
+        @callback
+        def _unsubscribe() -> None:
+            if subscription in self._subscriptions:
+                self._subscriptions.remove(subscription)
+            subscription.cancel()
+
+        return _unsubscribe
 
     async def async_shutdown(self) -> None:
         """Flush queued state, cancel RAII subscriptions and shut down the coordinator."""
@@ -1758,14 +1802,6 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
 
         self._on_stop: list[CALLBACK_TYPE] = []
         self._next_dynamics_line_fetch_at = 0.0
-        self._location_trail_restored = False
-        self._location_trail_resume_pending = False
-        self._location_trail_save_cancel: CALLBACK_TYPE | None = None
-        self._location_trail_store = Store[dict[str, Any]](
-            hass,
-            LOCATION_TRAIL_STORE_VERSION,
-            f"{DOMAIN}.location_trail.{config_entry.entry_id}.{device.device_name}",
-        )
 
         self.poll_debouncer = Debouncer(
             hass,
@@ -1877,157 +1913,16 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
         except (TypeError, ValueError):
             return False
 
-    def _clear_live_location_trail(self, device: MowingDevice) -> None:
-        """Clear the previous task's trail before a new task starts."""
-        self.location_trail.clear()
-        if getattr(device, "map", None) is None:
-            return
-        device.map.generated_dynamics_line_geojson = EMPTY_GEOJSON.copy()
-        device.map.generated_mow_progress_geojson = EMPTY_GEOJSON.copy()
-
-    @staticmethod
-    def _has_resume_breakpoint(device: MowingDevice) -> bool:
-        """Return whether the current task can resume from a breakpoint."""
-        try:
-            return int(device.report_data.work.bp_info) != 0
-        except (AttributeError, TypeError, ValueError):
-            return False
-
     def _refresh_poll_interval(self, device: MowingDevice) -> bool:
         """Use near-live polling only while a task is active."""
         active = self._is_live_report_active(device)
-        was_active = self._location_trail_active
-        previous_resume_pending = self._location_trail_resume_pending
-        if active and not was_active:
-            if self.location_trail and not self._location_trail_resume_pending:
-                self._clear_live_location_trail(device)
-            self._location_trail_resume_pending = False
-        elif not active:
-            self._location_trail_resume_pending = self._has_resume_breakpoint(device)
-        self._location_trail_active = active
-        if (
-            active != was_active
-            or self._location_trail_resume_pending != previous_resume_pending
-        ):
-            self._schedule_location_trail_save()
         self.update_interval = ACTIVE_REPORT_INTERVAL if active else REPORT_INTERVAL
         return active
 
-    async def _async_restore_location_trail(self) -> None:
-        """Restore the current or most recently completed task trail."""
-        if self._location_trail_restored:
-            return
-        self._location_trail_restored = True
-        stored = await self._location_trail_store.async_load()
-        if not isinstance(stored, dict):
-            return
-
-        points = stored.get("points")
-        if not isinstance(points, list):
-            return
-
-        restored: list[tuple[float, float]] = []
-        for point in points[-LOCATION_TRAIL_MAX_POINTS:]:
-            if not isinstance(point, (list, tuple)) or len(point) != 2:
-                continue
-            try:
-                longitude = float(point[0])
-                latitude = float(point[1])
-            except (TypeError, ValueError):
-                continue
-            if -180 <= longitude <= 180 and -90 <= latitude <= 90 and (
-                longitude != 0 or latitude != 0
-            ):
-                restored.append((longitude, latitude))
-
-        self.location_trail = restored
-        self._location_trail_active = bool(stored.get("active"))
-        self._location_trail_resume_pending = bool(stored.get("resume_pending"))
-
-    def _schedule_location_trail_save(self) -> None:
-        """Persist trail progress at a bounded interval while moving."""
-        if self._location_trail_save_cancel is not None:
-            return
-        self._location_trail_save_cancel = async_call_later(
-            self.hass,
-            LOCATION_TRAIL_SAVE_DELAY_SECONDS,
-            self._async_save_location_trail,
-        )
-
-    async def _async_save_location_trail(
-        self, _now: datetime.datetime | None = None
-    ) -> None:
-        """Write the retained trail to storage."""
-        self._location_trail_save_cancel = None
-        await self._location_trail_store.async_save(self._location_trail_store_data())
-
-    def _location_trail_store_data(self) -> dict[str, Any]:
-        """Return serialisable trail state for storage."""
-        return {
-            "active": self._location_trail_active,
-            "resume_pending": self._location_trail_resume_pending,
-            "points": self.location_trail[-LOCATION_TRAIL_MAX_POINTS:],
-        }
-
-    def _update_location_trail(self, device: MowingDevice | None = None) -> None:
-        """Append the latest mower GPS point to the in-memory trail."""
-        if device is None:
-            device = self.manager.get_device_by_name(self.device_name)
-        if device is None or not self._is_live_report_active(device):
-            return
-
-        location = getattr(getattr(device, "location", None), "device", None)
-        latitude = getattr(location, "latitude", None)
-        longitude = getattr(location, "longitude", None)
-        try:
-            lat = float(latitude)
-            lon = float(longitude)
-        except (TypeError, ValueError):
-            return
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180) or (lat == 0 and lon == 0):
-            return
-
-        point = (lon, lat)
-        if self.location_trail and (
-            _distance_meters(self.location_trail[-1], point)
-            < LOCATION_TRAIL_MIN_DISTANCE_METERS
-        ):
-            return
-        self.location_trail.append(point)
-        if len(self.location_trail) > LOCATION_TRAIL_MAX_POINTS:
-            del self.location_trail[:-LOCATION_TRAIL_MAX_POINTS]
-        self._sync_location_trail_geojson(device)
-        self._schedule_location_trail_save()
-
-    def _sync_location_trail_geojson(self, device: MowingDevice) -> None:
-        """Persist the HA GPS trail as a Mammotion map overlay."""
-        if len(self.location_trail) < 2 or getattr(device, "map", None) is None:
-            return
-        device.map.generated_dynamics_line_geojson = {
-            "type": "FeatureCollection",
-            "name": "Mammotion Live Trail",
-            "features": [
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "type_name": "trail",
-                        "Name": "Trail",
-                        "color": "#2377eb",
-                    },
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": self.location_trail[-LOCATION_TRAIL_MAX_POINTS:],
-                    },
-                }
-            ],
-        }
-
     async def _async_update_data(self) -> MowingDevice:
         """Get data from the device."""
-        await self._async_restore_location_trail()
         if data := await super()._async_update_data():
             self._refresh_poll_interval(data)
-            self._update_location_trail(data)
             return data
 
         device = self.manager.get_device_by_name(self.device_name)
@@ -2052,7 +1947,6 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
 
         LOGGER.debug("Updated Mammotion device %s", self.device_name)
         self.update_failures = 0
-        self._update_location_trail(device)
         self.async_save_data(device)
 
         if self.data.mower_state.ble_mac != "" and len(self._on_stop) == 0:
@@ -2090,18 +1984,10 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
         """Push updated device data to HA."""
         data = cast(MowingDevice, snapshot.raw)
         self._refresh_poll_interval(data)
-        self._update_location_trail(data)
         self.async_set_updated_data(data)
 
     async def async_shutdown(self) -> None:
-        """Flush retained trail state before shutting down."""
-        if self._location_trail_save_cancel is not None:
-            self._location_trail_save_cancel()
-            self._location_trail_save_cancel = None
-        if self._location_trail_restored:
-            await self._location_trail_store.async_save(
-                self._location_trail_store_data()
-            )
+        """Shut down the report coordinator."""
         await super().async_shutdown()
 
     async def _async_update_notification(self, res: tuple[str, Any | None]) -> None:
@@ -2140,7 +2026,6 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
             self.async_set_updated_data(device)
 
     async def _async_setup(self) -> None:
-        await self._async_restore_location_trail()
         await super()._async_setup()
 
         try:
@@ -2413,8 +2298,6 @@ class MammotionDeviceVersionUpdateCoordinator(
 class MammotionMapUpdateCoordinator(MammotionBaseUpdateCoordinator[MowerInfo]):
     """Class to manage fetching mammotion data."""
 
-    _dynamics_line_cancel: CALLBACK_TYPE | None = None
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -2487,71 +2370,12 @@ class MammotionMapUpdateCoordinator(MammotionBaseUpdateCoordinator[MowerInfo]):
         assert _d is not None
         return _d.mower_state
 
-    def _device_supports_dynamics_line(self) -> bool:
-        """Return True if this device supports the dynamics-line mow-progress stream."""
-        device = self.manager.get_device_by_name(self.device_name)
-        firmware = device.device_firmwares.main_controller if device else None
-        return DeviceType.value_of_str(self.device_name).is_support_dynamics_line(
-            firmware
-        )
-
-    def _ble_is_connected(self) -> bool:
-        """Return True if BLE transport exists and is currently connected."""
-        if handle := self.manager.mower(self.device_name):
-            if ble := handle.get_transport(TransportType.BLE):
-                return ble.is_connected
-        return False
-
-    def _stop_dynamics_line_poll(self) -> None:
-        if self._dynamics_line_cancel is not None:
-            self._dynamics_line_cancel()
-            self._dynamics_line_cancel = None
-
-    async def _on_sys_status_changed_dynamics(self, sys_status: int) -> None:
-        """Start the dynamics-line poll when mowing over BLE; stop it otherwise."""
-        if (
-            sys_status in MOWING_ACTIVE_MODES
-            and self._device_supports_dynamics_line()
-            and self._ble_is_connected()
-        ):
-            if self._dynamics_line_cancel is None:
-                self._dynamics_line_cancel = async_track_time_interval(
-                    self.hass,
-                    self._fetch_dynamics_line,
-                    DYNAMICS_LINE_INTERVAL,
-                )
-        else:
-            self._stop_dynamics_line_poll()
-
-    async def _fetch_dynamics_line(self, _now: datetime.datetime) -> None:
-        """Fetch the dynamics line; self-cancels if BLE has disconnected."""
-        if not self._ble_is_connected():
-            self._stop_dynamics_line_poll()
-            return
-        try:
-            await self.manager.get_dynamics_line(self.device_name)
-            device = self.manager.get_device_by_name(self.device_name)
-            if device is not None:
-                self.async_set_updated_data(device.mower_state)
-        except (
-            DeviceOfflineException,
-            NoTransportAvailableError,
-            GatewayTimeoutException,
-        ):
-            pass
-
     async def _async_setup(self) -> None:
         """Set up coordinator with initial call to get map data."""
         await super()._async_setup()
         device = self.manager.get_device_by_name(self.device_name)
         if device is None:
             return
-
-        if handle := self.manager.mower(self.device_name):
-            handle.watch_field(
-                lambda s: s.raw.report_data.dev.sys_status,
-                self._on_sys_status_changed_dynamics,
-            )
 
         if not device.enabled or not device.online:
             return
