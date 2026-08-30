@@ -557,9 +557,10 @@ class MammotionConfigAreaSwitchEntity(MammotionBaseEntity, SwitchEntity, Restore
         """Update the entity state."""
         self._attr_is_on = self.area in self.coordinator.operation_settings.areas
         known_area_hashes = _known_area_hashes(self.coordinator)
-        if self.area not in known_area_hashes and _area_names_loaded(
+        area_identity_loaded = _area_names_loaded(
             self.coordinator
-        ):
+        ) or DeviceType.is_luba1(self.coordinator.device_name)
+        if self.area not in known_area_hashes and area_identity_loaded:
             await self.async_remove()
             return
         self.async_write_ha_state()
@@ -621,7 +622,10 @@ def async_add_area_entities(
 
     # Startup registry cleanup: remove stale entries from previous sessions.
     area_names_loaded = _area_names_loaded(coordinator)
-    if map_area_hashes and area_names_loaded and (all_current_areas - added_areas):
+    area_identity_loaded = area_names_loaded or DeviceType.is_luba1(
+        coordinator.device_name
+    )
+    if map_area_hashes and area_identity_loaded and (all_current_areas - added_areas):
         _async_clean_stale_area_registry_entries(
             coordinator, all_current_areas, area_names_by_hash
         )
@@ -707,7 +711,7 @@ def async_add_area_entities(
 
     # Guard: only remove when map.area is non-empty — an empty map is a transient
     # refresh state and must not wipe the entity registry.
-    if map_area_hashes and area_names_loaded:
+    if map_area_hashes and area_identity_loaded:
         old_areas = added_areas - all_current_areas
         if old_areas:
             async_remove_stale_area_entities(coordinator, old_areas)

@@ -670,11 +670,15 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
         if mode in (
             WorkMode.MODE_PAUSE,
+            WorkMode.MODE_CHARGING_PAUSE,
             WorkMode.MODE_WORKING,
             WorkMode.MODE_RETURNING,
         ):
             try:
-                if mode != WorkMode.MODE_PAUSE:
+                if mode not in (
+                    WorkMode.MODE_PAUSE,
+                    WorkMode.MODE_CHARGING_PAUSE,
+                ):
                     if mode == WorkMode.MODE_WORKING:
                         trans_key = "pause_failed"
                         await self._async_task_control(
@@ -695,7 +699,10 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                         )
                     mode = self.rpt_dev_status.sys_status
 
-                if mode == WorkMode.MODE_PAUSE or (
+                if mode in (
+                    WorkMode.MODE_PAUSE,
+                    WorkMode.MODE_CHARGING_PAUSE,
+                ) or (
                     mode == WorkMode.MODE_READY
                     and self.report_data.work.bp_info != 0
                 ):

@@ -687,6 +687,9 @@ class MammotionConfigSelectEntity(MammotionBaseEntity, SelectEntity, RestoreEnti
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
         await super().async_added_to_hass()
+        if self.entity_description.get_fn is not None:
+            self._attr_current_option = self._resolve_option()
+            return
         if (state := await self.async_get_last_state()) is not None:
             if state.state in self.entity_description.options:
                 self._attr_current_option = state.state

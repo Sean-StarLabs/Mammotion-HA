@@ -397,11 +397,23 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
     async def async_added_to_hass(self) -> None:
         """Restore last saved value when entity is added to hass."""
         await super().async_added_to_hass()
+        if self.entity_description.get_fn is not None:
+            self._attr_native_value = self.entity_description.get_fn(self.coordinator)
+            return
         last_number_data = await self.async_get_last_number_data()
         if (last_number_data is not None) and (
             last_number_data.native_value is not None
         ):
-            self._attr_native_value = last_number_data.native_value
+            restored_value = last_number_data.native_value
+            if (
+                self._attr_native_min_value is not None
+                and restored_value < self._attr_native_min_value
+            ) or (
+                self._attr_native_max_value is not None
+                and restored_value > self._attr_native_max_value
+            ):
+                return
+            self._attr_native_value = restored_value
             if self.entity_description.set_fn is not None:
                 self.entity_description.set_fn(
                     self.coordinator, cast(float, self._attr_native_value)
