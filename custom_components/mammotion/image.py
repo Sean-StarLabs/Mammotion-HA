@@ -280,6 +280,7 @@ class MammotionMapImage(MammotionBaseEntity, ImageEntity):
             int(WorkMode.MODE_WORKING),
             int(WorkMode.MODE_RETURNING),
             int(WorkMode.MODE_PAUSE),
+            int(WorkMode.MODE_CHARGING_PAUSE),
         }
 
     @staticmethod

@@ -681,10 +681,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
     has_cloud_account = entry.data.get(
         CONF_HAS_CLOUD_ACCOUNT, bool(account and password)
     )
-    if has_cloud_account and entry.data.get(CONF_USE_WIFI) is not True:
+    cloud_enabled = bool(entry.data.get(CONF_USE_WIFI, has_cloud_account))
+    if has_cloud_account and CONF_USE_WIFI not in entry.data:
         hass.config_entries.async_update_entry(
             entry,
             data={**entry.data, CONF_USE_WIFI: True},
+        )
+    elif not cloud_enabled and _cloud_auth_backoff_until(entry.data) is not None:
+        _cancel_cloud_auth_retry(hass, entry.entry_id)
+        hass.config_entries.async_update_entry(
+            entry,
+            data=_without_cloud_auth_backoff(entry.data),
         )
 
     # Wire credential-save callback before login so any re-login triggered
@@ -708,8 +715,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
 
     cloud_available = False
 
-    if has_cloud_account and account and password and _cloud_auth_backoff_active(
-        entry.data
+    if (
+        cloud_enabled
+        and has_cloud_account
+        and account
+        and password
+        and _cloud_auth_backoff_active(entry.data)
     ):
         deadline = _cloud_auth_backoff_until(entry.data)
         LOGGER.warning(
@@ -718,7 +729,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
             deadline.isoformat() if deadline is not None else "unknown",
         )
         _schedule_cloud_auth_retry(hass, entry)
-    elif has_cloud_account and account and password:
+    elif cloud_enabled and has_cloud_account and account and password:
         cloud_available = await _async_attempt_login(
             hass,
             entry,
