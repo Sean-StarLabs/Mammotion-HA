@@ -30,8 +30,8 @@ from pymammotion.data.model.pool_state import (
 from pymammotion.utility.device_type import DeviceType
 
 from . import MammotionConfigEntry, MammotionReportUpdateCoordinator
-from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .const import DOMAIN
+from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
 from .yuka import (
     BLADE_SPEED_OPTIONS,
@@ -57,7 +57,6 @@ from .yuka import (
     voice_volume_option,
     yuka_value_option,
 )
-
 
 _SPINO_DOCK_MODE = (
     SpinoWorkMode.OFF
@@ -743,8 +742,8 @@ class MammotionAsyncConfigSelectEntity(
         self._attr_options = entity_description.options
         self._attr_current_option = self._resolve_option()
 
-    def _resolve_option(self) -> str:
-        """Return the current option, falling back to the first option."""
+    def _option_from_device(self) -> str | None:
+        """Return a valid option from the current device state."""
         if callable(self.entity_description.get_fn):
             value = self.entity_description.get_fn(self.coordinator)
             if isinstance(value, str) and value in self._attr_options:
@@ -752,10 +751,14 @@ class MammotionAsyncConfigSelectEntity(
             try:
                 idx = int(value)
             except (TypeError, ValueError):
-                return self._attr_options[0]
+                return None
             if 0 <= idx < len(self._attr_options):
                 return self._attr_options[idx]
-        return self._attr_options[0]
+        return None
+
+    def _resolve_option(self) -> str:
+        """Return the current option, falling back to the first option."""
+        return self._option_from_device() or self._attr_options[0]
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -772,6 +775,9 @@ class MammotionAsyncConfigSelectEntity(
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
         await super().async_added_to_hass()
+        if (device_option := self._option_from_device()) is not None:
+            self._attr_current_option = device_option
+            return
         if (state := await self.async_get_last_state()) is not None:
             if state.state in self.entity_description.options:
                 self._attr_current_option = state.state
