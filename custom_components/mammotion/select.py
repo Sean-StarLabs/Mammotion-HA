@@ -286,6 +286,20 @@ def _get_yuka_obstacle_detection(
     )
 
 
+def _get_yuka_wildlife_safety(
+    coordinator: MammotionBaseUpdateCoordinator,
+) -> str:
+    """Return off when wildlife safety is disabled, regardless of retained mode."""
+    animal_protection = coordinator.data.mower_state.animal_protection
+    if animal_protection.status == 0:
+        return "off"
+    return yuka_value_option(
+        WILDLIFE_SAFETY_OPTIONS,
+        animal_protection.mode,
+        WILDLIFE_SAFETY_VALUES,
+    )
+
+
 def _get_pattern_family(coordinator: MammotionBaseUpdateCoordinator) -> str:
     """Return the selected Yuka pattern family from operation settings."""
     return _value_option(
@@ -450,11 +464,7 @@ YUKA_ASYNC_SELECT_ENTITIES: tuple[MammotionAsyncConfigSelectEntityDescription, .
     MammotionAsyncConfigSelectEntityDescription(
         key="wildlife_safety",
         options=WILDLIFE_SAFETY_OPTIONS,
-        get_fn=lambda coordinator: yuka_value_option(
-            WILDLIFE_SAFETY_OPTIONS,
-            coordinator.data.mower_state.animal_protection.mode,
-            WILDLIFE_SAFETY_VALUES,
-        ),
+        get_fn=_get_yuka_wildlife_safety,
         set_fn=lambda coordinator, value: coordinator.async_set_wildlife_safety(
             WILDLIFE_SAFETY_VALUES[value]
         ),

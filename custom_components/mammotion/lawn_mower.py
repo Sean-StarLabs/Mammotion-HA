@@ -695,7 +695,10 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                         )
                     mode = self.rpt_dev_status.sys_status
 
-                if mode == WorkMode.MODE_PAUSE:
+                if mode == WorkMode.MODE_PAUSE or (
+                    mode == WorkMode.MODE_READY
+                    and self.report_data.work.bp_info != 0
+                ):
                     trans_key = "command_failed"
                     await self._async_task_control(
                         "cancel_job",

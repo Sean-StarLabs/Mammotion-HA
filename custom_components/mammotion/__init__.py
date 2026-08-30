@@ -1009,7 +1009,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
     mammotion.setup_all_mower_watchers()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+    loaded_options = dict(entry.options)
+
+    async def _async_options_update_listener(
+        hass: HomeAssistant, updated_entry: MammotionConfigEntry
+    ) -> None:
+        nonlocal loaded_options
+        if dict(updated_entry.options) == loaded_options:
+            return
+        loaded_options = dict(updated_entry.options)
+        await hass.config_entries.async_reload(updated_entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_async_options_update_listener))
 
     return True
 
@@ -1101,13 +1113,6 @@ def _load_cached_credentials(entry: MammotionConfigEntry) -> dict[str, Any]:
         library_data.get("mammotion_device_records")
     )
     return library_data if (has_aliyun or has_mammotion) else {}
-
-
-async def _async_update_listener(
-    hass: HomeAssistant, entry: MammotionConfigEntry
-) -> None:
-    """Handle options update."""
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: MammotionConfigEntry) -> bool:
