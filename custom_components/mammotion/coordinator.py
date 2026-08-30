@@ -117,6 +117,7 @@ LIVE_REPORT_MODES = {
     int(WorkMode.MODE_WORKING),
     int(WorkMode.MODE_PAUSE),
     int(WorkMode.MODE_RETURNING),
+    int(WorkMode.MODE_CHARGING_PAUSE),
 }
 
 # Possible states for ``MammotionReportUpdateCoordinator.map_sync_status`` and
@@ -1477,6 +1478,13 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         if device is None:
             return
 
+        try:
+            mode = int(cast(MowingDevice, device).report_data.dev.sys_status)
+        except (TypeError, ValueError):
+            return
+        if mode not in LIVE_REPORT_MODES:
+            return
+
         work = cast(MowingDevice, device).work
         if work is None:
             return
@@ -1548,6 +1556,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
                 self.data = mower_state
                 if handle is not None:
                     handle.restore_device(mower_state)
+                self.sync_operation_settings_from_current_task()
         except InvalidFieldValue:
             empty = MowingDevice()
             self.data = empty
@@ -1994,6 +2003,8 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
         """Push updated device data to HA."""
         data = cast(MowingDevice, snapshot.raw)
         self._refresh_poll_interval(data)
+        self.data = data
+        self.sync_operation_settings_from_current_task()
         self.async_set_updated_data(data)
 
     async def async_shutdown(self) -> None:

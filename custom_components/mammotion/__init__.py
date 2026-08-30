@@ -391,22 +391,13 @@ async def _async_attempt_login(
                 entry,
                 data=data_without_stale_credentials,
             )
-            if ble_fallback:
-                LOGGER.warning(
-                    "Mammotion cached cloud credentials expired; continuing with "
-                    "Bluetooth fallback and backing off cloud login"
-                )
-                _start_cloud_auth_backoff(
-                    hass,
-                    entry,
-                    data_without_stale_credentials,
-                )
-                return False
         try:
             await mammotion.login_and_initiate_cloud(
                 account, password, aiohttp_client.async_get_clientsession(hass)
             )
             return True
+        except ClientConnectorError as retry_err:
+            raise ConfigEntryNotReady(retry_err) from retry_err
         except (LoginFailedError, ReLoginRequiredError) as retry_err:
             if ble_fallback:
                 LOGGER.warning(
@@ -418,6 +409,30 @@ async def _async_attempt_login(
                 _start_cloud_auth_backoff(hass, entry)
                 return False
             raise ConfigEntryAuthFailed(retry_err) from retry_err
+        except EXPIRED_CREDENTIAL_EXCEPTIONS as retry_err:
+            if ble_fallback:
+                LOGGER.warning(
+                    "Mammotion cloud login failed after cache clear; continuing "
+                    "with Bluetooth fallback and backing off cloud login: %s",
+                    retry_err,
+                )
+                _start_cloud_auth_backoff(hass, entry)
+                return False
+            raise ConfigEntryAuthFailed(retry_err) from retry_err
+        except (
+            AccountInUseError,
+            TooManyRequestsException,
+            UnretryableException,
+        ) as retry_err:
+            if ble_fallback:
+                LOGGER.warning(
+                    "Mammotion cloud login failed after cache clear; continuing "
+                    "with Bluetooth fallback and backing off cloud login: %s",
+                    retry_err,
+                )
+                _start_cloud_auth_backoff(hass, entry)
+                return False
+            raise ConfigEntryError(retry_err) from retry_err
     except AccountInUseError as err:
         if ble_fallback:
             LOGGER.warning(
@@ -584,6 +599,9 @@ async def _async_setup_map_best_effort(
         try:
             async with asyncio.timeout(20):
                 await map_coordinator._async_setup()
+            await map_coordinator.async_request_refresh()
+        except asyncio.CancelledError:
+            raise
         except Exception as ex:
             LOGGER.warning(
                 "Mammotion map setup failed for %s; continuing startup and retrying "
@@ -591,6 +609,20 @@ async def _async_setup_map_best_effort(
                 map_coordinator.device_name,
                 ex,
             )
+
+            async def _async_retry_map(_: datetime) -> None:
+                await map_coordinator.async_request_refresh()
+
+            cancel = async_call_later(
+                map_coordinator.hass,
+                60,
+                HassJob(
+                    _async_retry_map,
+                    f"mammotion-map-retry-{map_coordinator.device_name}",
+                    cancel_on_shutdown=True,
+                ),
+            )
+            map_coordinator.config_entry.async_on_unload(cancel)
 
     map_coordinator.hass.async_create_task(_run_map_setup())
 
@@ -811,20 +843,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: MammotionConfigEntry) ->
                     map_coordinator=map_coordinator,
                     error_coordinator=error_coordinator,
                 )
-            )
-
-            async def _async_refresh_map(_: datetime) -> None:
-                """Call the debouncer at a later time."""
-                await map_coordinator.async_request_refresh()
-
-            async_call_later(
-                hass,
-                1,
-                HassJob(
-                    _async_refresh_map,
-                    "map-coordinator-refresh",
-                    cancel_on_shutdown=True,
-                ),
             )
 
         for rtk in mammotion_rtk_devices:

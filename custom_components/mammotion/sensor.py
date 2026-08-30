@@ -114,6 +114,7 @@ def _has_active_mow_task(mower_data: MowingDevice) -> bool:
         _enum_int(WorkMode.MODE_WORKING),
         _enum_int(WorkMode.MODE_RETURNING),
         _enum_int(WorkMode.MODE_PAUSE),
+        _enum_int(WorkMode.MODE_CHARGING_PAUSE),
     }
 
 
