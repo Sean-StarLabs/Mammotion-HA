@@ -947,6 +947,20 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
                 label,
                 self.device_name,
             )
+        except (
+            DeviceOfflineException,
+            NoTransportAvailableError,
+            CommandTimeoutError,
+            ConcurrentRequestError,
+            BLEUnavailableError,
+            HomeAssistantError,
+        ) as err:
+            LOGGER.debug(
+                "Setup read %s for %s failed; continuing: %s",
+                label,
+                self.device_name,
+                err,
+            )
 
     async def async_set_turning_mode(self, context: int) -> None:
         """Set turning mode."""
@@ -2024,35 +2038,41 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
     async def _async_setup(self) -> None:
         await super()._async_setup()
 
-        try:
-            await self.async_send_command("send_todev_ble_sync", sync_type=3)
-            await self.async_read_rain_detection()
-            await self.async_read_sidelight()
-            await self.async_read_turning_mode()
-            await self.async_read_traversal_mode()
-            if DeviceType.is_mini_or_x_series(self.device_name):
-                await self.async_read_manual_light()
-                await self.async_read_night_light()
-                await self.async_read_cutter_mode()
-            elif is_yuka_2(self.device_name):
-                await self.async_read_night_light()
-                await self.async_read_cutter_mode()
-            if DeviceType.is_luba_pro(self.device_name):
-                await self._async_setup_read(
-                    "audio config", self.async_fetch_audio_config
+        setup_reads: list[tuple[str, Callable[[], Any]]] = [
+            (
+                "BLE synchronization",
+                lambda: self.async_send_command("send_todev_ble_sync", sync_type=3),
+            ),
+            ("rain detection", self.async_read_rain_detection),
+            ("side light", self.async_read_sidelight),
+            ("turning mode", self.async_read_turning_mode),
+            ("traversal mode", self.async_read_traversal_mode),
+        ]
+        if DeviceType.is_mini_or_x_series(self.device_name):
+            setup_reads.extend(
+                (
+                    ("manual light", self.async_read_manual_light),
+                    ("night light", self.async_read_night_light),
+                    ("cutter mode", self.async_read_cutter_mode),
                 )
-                await self._async_setup_read(
-                    "wildlife safety", self.async_read_wildlife_safety
+            )
+        elif is_yuka_2(self.device_name):
+            setup_reads.extend(
+                (
+                    ("night light", self.async_read_night_light),
+                    ("cutter mode", self.async_read_cutter_mode),
                 )
-            await self.async_request_report_snapshot()
-        except (
-            DeviceOfflineException,
-            NoTransportAvailableError,
-            CommandTimeoutError,
-            ConcurrentRequestError,
-            BLEUnavailableError,
-        ):
-            pass
+            )
+        if DeviceType.is_luba_pro(self.device_name):
+            setup_reads.extend(
+                (
+                    ("audio config", self.async_fetch_audio_config),
+                    ("wildlife safety", self.async_read_wildlife_safety),
+                )
+            )
+        setup_reads.append(("report snapshot", self.async_request_report_snapshot))
+        for label, read in setup_reads:
+            await self._async_setup_read(label, read)
 
         # Watch sys_status changes so we can refresh the full status when the
         # device transitions states.  Skipped when the BLE polling loop is
@@ -2712,6 +2732,7 @@ class MammotionSpinoCoordinator(MammotionBaseUpdateCoordinator[PoolCleanerDevice
                 with contextlib.suppress(
                     GatewayTimeoutException,
                     NoTransportAvailableError,
+                    HomeAssistantError,
                 ):
                     await self.async_send_and_wait(
                         "read_write_device",
@@ -2726,6 +2747,7 @@ class MammotionSpinoCoordinator(MammotionBaseUpdateCoordinator[PoolCleanerDevice
                 with contextlib.suppress(
                     GatewayTimeoutException,
                     NoTransportAvailableError,
+                    HomeAssistantError,
                 ):
                     await fetch()
         except DeviceOfflineException:

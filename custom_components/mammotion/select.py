@@ -59,8 +59,10 @@ from .yuka import (
 )
 
 
-_SPINO_DOCK_MODE = getattr(SpinoWorkMode, "OFF", None) or getattr(
-    SpinoWorkMode, "RECHARGE", None
+_SPINO_DOCK_MODE = (
+    SpinoWorkMode.OFF
+    if hasattr(SpinoWorkMode, "OFF")
+    else getattr(SpinoWorkMode, "RECHARGE", None)
 )
 _SPINO_NON_START_MODES = {
     mode for mode in (SpinoWorkMode.UNKNOWN, _SPINO_DOCK_MODE) if mode is not None

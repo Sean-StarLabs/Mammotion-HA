@@ -20,8 +20,10 @@ from .entity import MammotionBaseSpinoEntity
 # The fan-speed picker maps to the Spino cleaning work modes. OFF (no mode
 # active; as a command it is the dock action exposed via return_to_base) and
 # UNKNOWN are excluded — neither is a selectable cleaning speed.
-_SPINO_DOCK_MODE = getattr(SpinoWorkMode, "OFF", None) or getattr(
-    SpinoWorkMode, "RECHARGE"
+_SPINO_DOCK_MODE = (
+    SpinoWorkMode.OFF
+    if hasattr(SpinoWorkMode, "OFF")
+    else SpinoWorkMode.RECHARGE
 )
 _FAN_SPEED_EXCLUDED = {_SPINO_DOCK_MODE, SpinoWorkMode.UNKNOWN}
 FAN_SPEED_MODES = [

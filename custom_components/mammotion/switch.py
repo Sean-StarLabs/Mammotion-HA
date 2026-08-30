@@ -167,9 +167,8 @@ AUDIO_SWITCH_ENTITIES: tuple[MammotionAsyncSwitchEntityDescription, ...] = (
 SWITCH_ENTITIES: tuple[MammotionAsyncSwitchEntityDescription, ...] = (
     MammotionAsyncSwitchEntityDescription(
         key="side_led",
-        is_on_func=lambda coordinator: bool(
-            coordinator.data.mower_state.side_led.operate
-        ),
+        is_on_func=lambda coordinator: coordinator.data.mower_state.side_led.enable
+        == 0,
         set_fn=lambda coordinator, value: coordinator.async_set_sidelight(int(value)),
         entity_category=EntityCategory.CONFIG,
     ),
@@ -589,12 +588,11 @@ def async_add_area_entities(
         if str(k).lstrip("-").isdigit() and (area_id := int(k)) != 0
     }
     area_names_by_hash = _active_named_areas(coordinator, map_area_hashes)
+    real_named_map_area_hashes = set(area_names_by_hash)
     area_names = {name.lower() for name in area_names_by_hash.values()}
     for area in computed:
-        area_name = _display_area_name(
-            area.hash,
-            str(getattr(area, "name", "") or "").strip(),
-        )
+        raw_area_name = str(getattr(area, "name", "") or "").strip()
+        area_name = _display_area_name(area.hash, raw_area_name)
         if (
             area.hash in area_names_by_hash
             and _is_generic_area_name(area_name, area.hash)
@@ -605,6 +603,8 @@ def async_add_area_entities(
                 continue
         area_names_by_hash[area.hash] = area_name
         area_names.add(area_name.lower())
+        if raw_area_name and not _is_generic_area_name(raw_area_name, area.hash):
+            real_named_map_area_hashes.add(area.hash)
     area_names_by_hash.update(_fallback_named_areas(coordinator, area_names_by_hash))
     for area_id in sorted(map_area_hashes):
         area_names_by_hash.setdefault(area_id, _display_area_name(area_id, ""))
@@ -613,10 +613,10 @@ def async_add_area_entities(
         return
 
     # Trigger re-fetch when the device hasn't yet sent names for all areas.
-    # Luba 1 / Yuka never provides area_name, so skip for it.
+    # Check before considering generated fallbacks, which are selectable but do
+    # not prove that the device's name list has arrived.
     if not DeviceType.is_luba1(coordinator.device_name):
-        named_map_area_hashes = set(area_names_by_hash) & map_area_hashes
-        if map_area_hashes - named_map_area_hashes:
+        if map_area_hashes - real_named_map_area_hashes:
             coordinator.hass.async_create_task(coordinator.async_get_area_list())
 
     # Startup registry cleanup: remove stale entries from previous sessions.

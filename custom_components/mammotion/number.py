@@ -187,6 +187,8 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward", value
         ),
+        set_async_fn=lambda coordinator,
+        value: coordinator.async_modify_plan_if_mowing(),
         get_fn=lambda coordinator: coordinator.operation_settings.toward,
         available_fn=lambda coordinator: coordinator.operation_settings.channel_mode
         in (STRIPES_PATTERN_VALUE, GRID_PATTERN_VALUE)
@@ -269,7 +271,13 @@ async def async_setup_entry(
             async_add_entities(entities)
             continue
 
-        for entity_description in NUMBER_WORKING_ENTITIES:
+        is_original_yuka = DeviceType.is_yuka(
+            mower.device.device_name
+        ) and not is_yuka_mini_or_ml(mower.device.device_name)
+        working_entities = (
+            YUKA_NUMBER_ENTITIES if is_original_yuka else NUMBER_WORKING_ENTITIES
+        )
+        for entity_description in working_entities:
             entities.append(
                 MammotionWorkingNumberEntity(
                     mower.reporting_coordinator, entity_description, limits
@@ -298,15 +306,6 @@ async def async_setup_entry(
                 )
             )
 
-        if DeviceType.is_yuka(mower.device.device_name) and not is_yuka_mini_or_ml(
-            mower.device.device_name
-        ):
-            for entity_description in YUKA_NUMBER_ENTITIES:
-                entities.append(
-                    MammotionConfigNumberEntity(
-                        mower.reporting_coordinator, entity_description
-                    )
-                )
         if not DeviceType.is_yuka(mower.device.device_name):
             for entity_description in LUBA_WORKING_ENTITIES:
                 entities.append(
