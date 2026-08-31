@@ -402,21 +402,20 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             WorkMode.MODE_RETURNING,
         ):
             try:
-                if mode != WorkMode.MODE_PAUSE:
-                    if mode == WorkMode.MODE_WORKING:
-                        trans_key = "pause_failed"
-                        await self.coordinator.async_send_command("pause_execute_task")
-                    if mode == WorkMode.MODE_RETURNING:
-                        trans_key = "dock_failed"
-                        await self.coordinator.async_send_command(
-                            "cancel_return_to_dock"
-                        )
-                    await self.coordinator.async_request_report_snapshot()
-                    mode = self.rpt_dev_status.sys_status
-
-                if mode == WorkMode.MODE_PAUSE:
+                if mode == WorkMode.MODE_WORKING:
                     trans_key = "pause_failed"
-                    await self.coordinator.async_send_command("cancel_job")
+                    await self.coordinator.async_send_and_wait(
+                        "pause_execute_task", "todev_taskctrl_ack"
+                    )
+                elif mode == WorkMode.MODE_RETURNING:
+                    trans_key = "dock_cancel_failed"
+                    await self.coordinator.async_send_and_wait(
+                        "cancel_return_to_dock", "todev_taskctrl_ack"
+                    )
+
+                await self.coordinator.async_send_and_wait(
+                    "cancel_job", "todev_taskctrl_ack"
+                )
 
             except COMMAND_EXCEPTIONS as exc:
                 raise HomeAssistantError(
