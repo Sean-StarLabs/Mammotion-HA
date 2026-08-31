@@ -29,6 +29,16 @@
   ],
   "iot_class": "local_push",
   "requirements": [
-    "pymammotion==0.8.14"
+    "aiomqtt>=2.5.1",
+    "crcmod~=1.7",
+    "mashumaro~=3.13",
+    "numpy>=1.26.0",
+    "orjson>=3.9.15,<4",
+    "pillow>=11.0.0",
+    "protobuf>=4.23.1",
+    "pyjwt>=2.10.1",
+    "python-dotenv>=1.0.0",
+    "webrtc-models>=0.3.0",
+    "websockets>=13.1"
   ]
 }

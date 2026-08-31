@@ -1,0 +1,618 @@
+"""Device model hierarchy: Device base + MowerDevice (and future PoolCleanerDevice)."""
+
+import dataclasses
+from dataclasses import dataclass, field
+import math
+import time
+from typing import Any, ClassVar
+
+from mashumaro.mixins.orjson import DataClassORJSONMixin
+import orjson
+
+from pymammotion.data.model import HashList, RapidState
+from pymammotion.data.model.device_info import DeviceFirmwares, DeviceNonWorkingHours, MowerInfo
+from pymammotion.data.model.device_limits import DeviceLimits
+from pymammotion.data.model.enums import TaskAreaStatus
+from pymammotion.data.model.errors import DeviceErrors
+from pymammotion.data.model.events import OTA_RESULT_SUCCESS, Events, OTAProgress
+from pymammotion.data.model.location import Location
+from pymammotion.data.model.pool_state import PoolMap, PoolPlan, PoolState
+from pymammotion.data.model.report_info import BaseScore, ReportData, WorkSessionResult
+from pymammotion.data.model.work import CurrentTaskSettings
+from pymammotion.data.mqtt.event import ThingEventMessage
+from pymammotion.data.mqtt.properties import ThingPropertiesMessage
+from pymammotion.data.mqtt.status import ThingStatusMessage
+from pymammotion.http.model.http import CheckDeviceVersion
+from pymammotion.proto import (
+    DeviceFwInfo,
+    DrvUpgradeReport,
+    MowToAppInfoT,
+    ReportInfoData,
+    SystemTardStateTunnelMsg,
+    SystemUpdateBufMsg,
+)
+from pymammotion.utility.constant import MOWING_ACTIVE_MODES
+from pymammotion.utility.constant.device_constant import WorkMode
+from pymammotion.utility.conversions import parse_double
+from pymammotion.utility.device_config import DeviceConfig
+from pymammotion.utility.map import CoordinateConverter
+
+_device_config = DeviceConfig()
+
+#: How long a device-pushed OTA frame keeps precedence over the cloud version poll.
+#: Mirrors the APK's 25 s upgrade-report timeout (``MACarDataManager`` handler message
+#: 1003), widened to tolerate a BLE stall mid-upgrade without handing back prematurely.
+_OTA_PUSH_STALE_AFTER: float = 60.0
+
+
+@dataclass
+class Device(DataClassORJSONMixin):
+    """Base class for any Mammotion device (lawn mower, pool cleaner, RTK, …).
+
+    Holds only the fields that are truly universal — identity, online flag,
+    OTA check, and MQTT envelopes. Device-class-specific state lives on
+    subclasses (``MowerDevice``, ``PoolCleanerDevice``, …).
+    """
+
+    name: str = ""
+    online: bool = True
+    enabled: bool = True
+    update_check: CheckDeviceVersion = field(default_factory=CheckDeviceVersion)
+    mqtt_properties: ThingPropertiesMessage | None = None
+    status_properties: ThingStatusMessage | None = None
+    device_event: ThingEventMessage | None = None
+    #: Monotonic timestamp of the last device-pushed ``toapp_upgrade_report``
+    #: (0.0 = never).  Only meaningful within one process — see
+    #: :meth:`has_live_ota_push`.
+    ota_progress_at: float = 0.0
+
+    def has_live_ota_push(self) -> bool:
+        """Return True when a device-pushed OTA frame is recent enough to still be trusted.
+
+        OTA progress reaches us two ways: the cloud's ``checkDeviceVersion`` poll, and —
+        only while BLE is connected — the device's own ``toapp_upgrade_report`` stream.
+        The BLE stream is far fresher (multiple frames per second vs. a slow poll), so
+        while it is flowing it must win; but it stops dead when the device reboots to
+        install, and something has to let the cloud take back over.
+
+        ``_OTA_PUSH_STALE_AFTER`` bounds that hand-back.  The APK does the same thing with
+        a 25 s timer (``MACarDataManager`` re-arms ``handler`` message 1003 for 25 000 ms
+        on every upgrade frame); this window is deliberately more generous.
+
+        A negative age means the stamp came from a previous process (monotonic clocks
+        reset on restart, and the field round-trips through HA's store), so it is treated
+        as stale — the cloud wins, which is the safe direction: a stuck "upgrading" state
+        cannot be cleared by anything else.
+        """
+        if not self.ota_progress_at:
+            return False
+        age = time.monotonic() - self.ota_progress_at
+        return 0.0 <= age < _OTA_PUSH_STALE_AFTER
+
+    def apply_version_check(self, check: CheckDeviceVersion) -> None:
+        """Store the OTA version-check result and seed the current firmware version.
+
+        ``check.current_version`` is the cloud's view of the installed firmware.
+        Mirror it into ``device_firmwares.device_version`` (when the subclass
+        tracks firmware) so consumers have a version before any protobuf report
+        arrives; the state reducer refreshes it from telemetry once reports flow.
+
+        The cloud poll lags a BLE-observed upgrade badly — captured mid-upgrade it
+        returns ``isupgrading=False, progress=0`` while the device is streaming 25% — so
+        a poll that claims *nothing is happening* must not erase live push progress.  A
+        poll that agrees an upgrade is running is taken as-is: it is the authority
+        whenever BLE isn't connected, and the only source for everything else in the
+        check (release notes, upgradeable, the available version).
+        """
+        if check.isupgrading or not self.has_live_ota_push() or not self.update_check.isupgrading:
+            self.update_check = check
+        else:
+            # Keep the live push's verdict, take everything else from the cloud.
+            # replace() rather than mutating `check` — the caller owns that object.
+            self.update_check = dataclasses.replace(
+                check,
+                isupgrading=True,
+                progress=self.update_check.progress,
+            )
+        device_firmwares = getattr(self, "device_firmwares", None)
+        if device_firmwares is not None and check.current_version:
+            device_firmwares.device_version = check.current_version
+
+    def apply_ota_progress(self, report: DrvUpgradeReport) -> None:
+        """Fold a device-pushed ``toapp_upgrade_report`` into the OTA state.
+
+        The device streams live upgrade progress over protobuf, but the cloud's
+        ``checkDeviceVersion`` poll — which is what consumers read — only refreshes on its
+        own slow cadence and reports ``isupgrading=False, progress=0`` for the whole run.
+        Mirroring the push into ``update_check`` means there is still exactly *one* place
+        to ask "is this device upgrading, and how far along": consumers keep reading
+        ``update_check`` and get live values regardless of which path delivered them.
+
+        ``events.ota_progress`` keeps the full frame (stage message, otaid, recv_cnt) for
+        subclasses that track it; ``update_check`` carries only what a progress display
+        needs.
+
+        Progress is clamped monotonic within one ``otaid``: the device interleaves report
+        copies across delivery paths, so an older frame can arrive after a newer one and
+        would otherwise make a progress bar jump backwards.  A new ``otaid`` is a new job
+        and resets the floor.  Mirrors the APK's ``if (currProgress > progress) return;``
+        guard in ``FirmwareUpdateKTView.setProgress``.
+        """
+        self.ota_progress_at = time.monotonic()
+        events = getattr(self, "events", None)
+        previous: OTAProgress | None = events.ota_progress if events is not None else None
+
+        progress = report.progress
+        if (
+            previous is not None
+            and previous.otaid == report.otaid
+            and report.result != OTA_RESULT_SUCCESS
+            and progress < previous.progress
+        ):
+            progress = previous.progress
+
+        if events is not None:
+            events.ota_progress = OTAProgress(
+                devname=report.devname,
+                otaid=report.otaid,
+                version=report.version,
+                progress=progress,
+                result=report.result,
+                message=report.message,
+                recv_cnt=report.recv_cnt,
+            )
+
+        status = OTAProgress(progress=progress, result=report.result)
+        if status.is_complete:
+            # Completion frames carry the progress counter of whatever sub-component
+            # finished last, not 100 — pin it so a display doesn't rest at e.g. 27%.
+            self.update_check.progress = 100
+            self.update_check.isupgrading = False
+            self.update_check.upgradeable = False
+            if report.version:
+                self.update_check.current_version = report.version
+                device_firmwares = getattr(self, "device_firmwares", None)
+                if device_firmwares is not None:
+                    device_firmwares.device_version = report.version
+        elif status.is_failed:
+            self.update_check.progress = progress
+            self.update_check.isupgrading = False
+        else:
+            self.update_check.progress = progress
+            self.update_check.isupgrading = True
+
+    #: Module ``type`` → DeviceFirmwares field(s), covering mower, RTK (10x),
+    #: dual-driver Yuka (20x), and Spino pool cleaner (6x) modules.
+    _MOD_TYPE_TO_FW_FIELDS: ClassVar[dict[int, tuple[str, ...]]] = {
+        1: ("main_controller",),
+        3: ("left_motor_driver",),
+        4: ("right_motor_driver",),
+        5: ("rtk_rover_station",),
+        7: ("bms",),
+        8: ("main_controller_bt",),
+        9: ("left_motor_driver_bt",),
+        10: ("right_motor_driver_bt",),
+        11: ("bsp",),
+        12: ("middleware",),
+        14: ("lora_module",),
+        16: ("lte_module",),
+        17: ("lidar",),
+        61: ("main_controller",),  # Spino PAMH5
+        62: ("main_controller_bt",),  # Spino PMH5BT
+        63: ("wheel_hub_motor",),
+        65: ("water_pump",),
+        67: ("communication",),
+        72: ("communication",),
+        101: ("main_controller",),  # RTK main board
+        102: ("rtk_version",),
+        103: ("lora_version",),
+        201: ("left_motor_driver", "right_motor_driver"),
+        202: ("left_motor_driver_bt", "right_motor_driver_bt"),
+        203: ("cutter_driver",),
+        204: ("cutter_driver_bt",),
+    }
+
+    def update_device_firmwares(self, fw_info: DeviceFwInfo) -> None:
+        """Set firmware versions on all parts of the robot, pool cleaner, or RTK."""
+        fw = getattr(self, "device_firmwares", None)
+        if fw is None:
+            return
+        for mod in fw_info.mod:
+            for field_name in self._MOD_TYPE_TO_FW_FIELDS.get(mod.type, ()):
+                setattr(fw, field_name, mod.version)
+
+
+@dataclass
+class MowerDevice(Device):
+    """Lawn-mowing robot (Luba, Yuka, RTK rovers).
+
+    Wraps the betterproto dataclasses so we can bypass the oneof groups and
+    keep everything in one place.
+    """
+
+    mower_state: MowerInfo = field(default_factory=MowerInfo)
+    map: HashList = field(default_factory=HashList)
+    work: CurrentTaskSettings = field(default_factory=CurrentTaskSettings)
+    location: Location = field(default_factory=Location)
+    mowing_state: RapidState = field(default_factory=RapidState)
+    report_data: ReportData = field(default_factory=ReportData)
+    device_firmwares: DeviceFirmwares = field(default_factory=DeviceFirmwares)
+    errors: DeviceErrors = field(default_factory=DeviceErrors)
+    non_work_hours: DeviceNonWorkingHours = field(default_factory=DeviceNonWorkingHours)
+    events: Events = field(default_factory=Events)
+    work_session_result: WorkSessionResult = field(default_factory=WorkSessionResult)
+
+    @property
+    def device_limits(self) -> DeviceLimits:
+        """Return the operating limits for this device.
+
+        Tries (in order):
+          1. sub_model_id — the most specific internal model code
+          2. product_key  — per-product-family limits
+          3. get_best_default — safe fallback based on device family
+        """
+        limits = _device_config.get_working_parameters(self.mower_state.sub_model_id)
+        if limits is None:
+            limits = _device_config.get_working_parameters(self.mower_state.product_key)
+        if limits is None:
+            limits = _device_config.get_best_default(self.mower_state.product_key)
+        return limits
+
+    def clear_version_info(self) -> None:
+        """Clear all cached firmware version info so it will be re-fetched after an OTA update."""
+        self.device_firmwares = DeviceFirmwares()
+        self.mower_state.swversion = ""
+
+    def buffer(self, buffer_list: SystemUpdateBufMsg) -> None:
+        """Update the device based on which buffer we are reading from."""
+        match buffer_list.update_buf_data[0]:
+            case 1:
+                # 4 speed?
+                if buffer_list.update_buf_data[5] != 0:
+                    self.location.RTK.latitude = parse_double(buffer_list.update_buf_data[5], 8.0)
+                    self.location.RTK.longitude = parse_double(buffer_list.update_buf_data[6], 8.0)
+                    # Index 13 = RTK base station heading (radians) — used to rotate device-local
+                    # ENU coordinates to geographic ENU for correct map placement.
+                    if len(buffer_list.update_buf_data) > 13:
+                        self.location.RTK.yaw = parse_double(buffer_list.update_buf_data[13], 8.0)
+                if buffer_list.update_buf_data[7] != 0:
+                    # latitude Y longitude X
+                    self.location.dock.longitude = parse_double(buffer_list.update_buf_data[7], 4.0)
+                    self.location.dock.latitude = parse_double(buffer_list.update_buf_data[8], 4.0)
+                    self.location.dock.rotation = buffer_list.update_buf_data[3]
+
+            case 2:
+                self.errors.err_code_list.clear()
+                self.errors.err_code_list_time.clear()
+                self.errors.err_code_list.extend(
+                    [
+                        buffer_list.update_buf_data[3],
+                        buffer_list.update_buf_data[5],
+                        buffer_list.update_buf_data[7],
+                        buffer_list.update_buf_data[9],
+                        buffer_list.update_buf_data[11],
+                        buffer_list.update_buf_data[13],
+                        buffer_list.update_buf_data[15],
+                        buffer_list.update_buf_data[17],
+                        buffer_list.update_buf_data[19],
+                        buffer_list.update_buf_data[21],
+                    ]
+                )
+                self.errors.err_code_list_time.extend(
+                    [
+                        buffer_list.update_buf_data[4],
+                        buffer_list.update_buf_data[6],
+                        buffer_list.update_buf_data[8],
+                        buffer_list.update_buf_data[10],
+                        buffer_list.update_buf_data[12],
+                        buffer_list.update_buf_data[14],
+                        buffer_list.update_buf_data[16],
+                        buffer_list.update_buf_data[18],
+                        buffer_list.update_buf_data[20],
+                        buffer_list.update_buf_data[22],
+                    ]
+                )
+            case 3:
+                # Task area state event (TaskAreaStateEvent in APK / MACarDataManager).
+                # Format: [3, 0, count, hash1, status1, hash2, status2, ...]
+                # Pairs of (zone_hash, status) starting at index 3, step 2.
+                # task_area_ids preserves the original mow order of zones.
+                # Status values: see TaskAreaStatus enum.
+                task_area_map: dict[int, TaskAreaStatus] = {}
+                task_area_ids = []
+
+                for i in range(3, len(buffer_list.update_buf_data), 2):
+                    area_id = buffer_list.update_buf_data[i]
+
+                    if area_id != 0:
+                        status = TaskAreaStatus(int(buffer_list.update_buf_data[i + 1]))
+                        if status is TaskAreaStatus.ABORTED:
+                            continue
+                        task_area_map[area_id] = status
+                        task_area_ids.append(area_id)
+                self.events.work_tasks_event.hash_area_map = task_area_map
+                self.events.work_tasks_event.ids = task_area_ids
+
+    def update_report_data(self, toapp_report_data: ReportInfoData) -> None:
+        """Set report data for the mower."""
+
+        # adjust for vision models
+        if (
+            (rtk := toapp_report_data.rtk)
+            and (mqtt_rtk := rtk.mqtt_rtk_info)
+            and self.location.RTK.latitude == 0.0
+            and self.location.RTK.longitude == 0.0
+        ):
+            if mqtt_rtk.latitude != 0.0:
+                self.location.RTK.longitude = math.radians(mqtt_rtk.longitude)
+                self.location.RTK.latitude = math.radians(mqtt_rtk.latitude)
+
+        coordinate_converter = CoordinateConverter(self.location.RTK.latitude, self.location.RTK.longitude)
+        for index, location in enumerate(toapp_report_data.locations):
+            if index == 0:
+                self.location.position_type = location.pos_type
+                self.location.orientation = int(location.real_toward / 10000)
+                x_dev = parse_double(location.real_pos_x, 4.0)
+                y_dev = parse_double(location.real_pos_y, 4.0)
+                yaw = self.location.RTK.yaw
+                east_geo = math.cos(yaw) * x_dev - math.sin(yaw) * y_dev
+                north_geo = math.sin(yaw) * x_dev + math.cos(yaw) * y_dev
+                self.location.device = coordinate_converter.enu_to_lla(north_geo, east_geo)
+                self.location.work_zone = location.zone_hash
+
+        if toapp_report_data.fw_info:
+            self.update_device_firmwares(toapp_report_data.fw_info)
+
+        previous_path_hash = int(self.report_data.work.path_hash)
+        was_actively_mowing = self.report_data.dev.sys_status in MOWING_ACTIVE_MODES
+        incoming_status = toapp_report_data.dev.sys_status if toapp_report_data.dev else 0
+        reported_status = incoming_status or self.report_data.dev.sys_status
+        is_actively_mowing = reported_status in MOWING_ACTIVE_MODES
+        if toapp_report_data.dev is not None and reported_status != 0 and not is_actively_mowing:
+            self.map.clear_dynamics_line()
+
+        if toapp_report_data.work is not None:
+            # A mid-mow restart can produce path_hash=0/1 or ub_path_hash=0 in
+            # the first report before the device re-reports its active hashes.
+            # Guard all state-clearing operations so a transient zero doesn't
+            # wipe live mow data (cover path, zone list, GeoJSON) mid-job.
+            reported_path_hash = int(toapp_report_data.work.path_hash)
+            if reported_path_hash in (0, 1):
+                reported_path_hash = 0
+            if self.map.current_mow_path and reported_path_hash:
+                associated_path_hash = self.map.current_mow_path_hash
+                pending_previous_hash = self.map.pending_planned_mow_path_previous_hash
+                if self.map.planned_mow_path_pending:
+                    if reported_path_hash == associated_path_hash:
+                        self.map.planned_mow_path_pending = False
+                        self.map.pending_planned_mow_path_previous_hash = 0
+                    elif reported_path_hash != pending_previous_hash or is_actively_mowing:
+                        self.map.invalidate_mow_path(0)
+                elif associated_path_hash and associated_path_hash != reported_path_hash:
+                    self.map.invalidate_mow_path(0)
+                elif associated_path_hash == 0:
+                    # A legacy cache can be adopted only when its packets carry
+                    # the same task hash. Otherwise the first report could bind
+                    # an old route to a completely new job.
+                    if self.map.has_mow_path_for_hash(reported_path_hash):
+                        self.map.current_mow_path_hash = reported_path_hash
+                    else:
+                        self.map.invalidate_mow_path(0)
+            if self.map.dynamics_line and reported_path_hash:
+                if self.map.dynamics_line_path_hash != reported_path_hash:
+                    self.map.clear_dynamics_line()
+            if not is_actively_mowing:
+                if (toapp_report_data.work.area >> 16) == 0 and toapp_report_data.work.ub_path_hash == 0:
+                    self.work.zone_hashs = []
+                    self.events.work_tasks_event.hash_area_map = {}
+                    self.events.work_tasks_event.ids = []
+                    self.map.invalidate_breakpoint_line(0)
+                if not self.map.planned_mow_path_pending:
+                    self.map.invalidate_mow_path(toapp_report_data.work.path_hash)
+            self.map.invalidate_breakpoint_line(toapp_report_data.work.ub_path_hash)
+
+        self.report_data.update(toapp_report_data)
+        if (
+            toapp_report_data.work is not None
+            and was_actively_mowing
+            and is_actively_mowing
+            and self.report_data.work.path_hash in (0, 1)
+            and previous_path_hash not in (0, 1)
+        ):
+            # Active devices transiently report the end sentinels while
+            # reconnecting. Keep the last stable task identity so subsequent
+            # live-line polls remain bound to the running job.
+            self.report_data.work.path_hash = previous_path_hash
+
+    def run_state_update(self, tard_state: SystemTardStateTunnelMsg) -> None:
+        """Set lat long, work zone of RTK and robot."""
+        coordinate_converter = CoordinateConverter(self.location.RTK.latitude, self.location.RTK.longitude)
+        self.mowing_state = RapidState().from_raw(tard_state.tard_state_data)
+        self.location.position_type = self.mowing_state.pos_type
+        self.location.orientation = int(self.mowing_state.toward)
+        x_dev = parse_double(self.mowing_state.pos_x, 4.0)
+        y_dev = parse_double(self.mowing_state.pos_y, 4.0)
+        yaw = self.location.RTK.yaw
+        east_geo = math.cos(yaw) * x_dev - math.sin(yaw) * y_dev
+        north_geo = math.sin(yaw) * x_dev + math.cos(yaw) * y_dev
+        self.location.device = coordinate_converter.enu_to_lla(north_geo, east_geo)
+        self.location.work_zone = self.mowing_state.zone_hash
+
+    def mow_info(self, toapp_mow_info: MowToAppInfoT) -> None:
+        """Set mow info — type 3 signals a power-off event."""
+        if toapp_mow_info.type == 3:
+            self.report_data.dev.sys_status = WorkMode.MODE_POWER_OFF
+
+    def report_missing_data(self) -> list[str]:
+        """Report what data is missing for basic operation."""
+        from pymammotion.device.readiness import get_readiness_checker
+
+        checker = get_readiness_checker(self.name)
+        status = checker.check(self)
+        return status.missing
+
+
+@dataclass
+class PoolCleanerDevice(Device):
+    """Swimming-pool cleaning robot (Spino, Spino-S1/E1/SP).
+
+    Carries only the state the Mammotion Android app actually surfaces in
+    its pool-cleaner fragments + settings screens (see ``pool_state.py``
+    for the field-by-field rationale). Internal-only proto fields (pump
+    status, wheel state, …) are intentionally omitted until they show up
+    in the UI or there is a concrete consumer for them.
+    """
+
+    iot_id: str = ""
+    product_key: str = ""
+    wifi_ssid: str = ""
+    ip: str = ""
+    wifi_enabled: bool = True
+    pool_state: PoolState = field(default_factory=PoolState)
+    pool_map: PoolMap = field(default_factory=PoolMap)
+    plans: dict[int, PoolPlan] = field(default_factory=dict)
+    """Scheduled cleaning plans, keyed by ``PoolPlan.jobid``. Populated by
+    the PoolStateReducer from ``LubaMsg.ctrl.plan_job_set`` frames; fetched
+    by ``MammotionClient.start_spino_plan_sync``."""
+    plans_stale: bool = False
+    """Set by the reducer when it sees a ``plan_job_set`` with a
+    ``totalplannum`` greater than ``len(plans)`` — a hint to the HA polling
+    layer that a re-fetch is required."""
+    device_firmwares: DeviceFirmwares = field(default_factory=DeviceFirmwares)
+    errors: DeviceErrors = field(default_factory=DeviceErrors)
+
+
+@dataclass
+class RTKBaseStationDevice(Device):
+    """RTK base station (RTK, RBS03A0/A1/A2, RTKNB).
+
+    All devices share one MQTT connection per account (Aliyun or Mammotion
+    MQTT); messages are routed by ``iot_id``.  This model holds state from
+    messages that carry the RTK device's own ``iot_id``.  The mower-side
+    relay data (satellite count, fix status, LoRa channel) arrives in
+    messages with the *mower's* ``iot_id`` via ``base.to_app`` and is stored
+    on ``MowerDevice.report_data.basestation_info`` — not here.
+
+    Fields populated from LubaMsg protobuf (``iot_id``-routed):
+
+    - ``basestation_status``: from ``sys.toapp_report_data`` →
+      ``rpt_basestation_info.basestation_status``.
+    - ``connect_status_since_poweron``: connectivity uptime, same source.
+    - ``device_version``: from ``sys.toapp_dev_fw_info`` or thing/properties.
+    - ``wifi_mac``: from ``net.toapp_networkinfo_rsp``.
+    - ``product_key``: from ``net.toapp_wifi_iot_status``.
+
+    Fields populated from ``base.to_app`` (``ResponseBasestationInfoT``):
+
+    - ``sats_num``: number of satellites in view.
+    - ``rtk_status``: RTK fix quality.
+    - ``app_connect_type``: connection type (BLE/Wi-Fi/MQTT).
+    - ``lora_scan``, ``lora_channel``, ``lora_locid``, ``lora_netid``: LoRa radio config.
+    - ``mqtt_rtk_status``, ``rtk_channel``, ``rtk_switch``: additional RTK state.
+    - ``lowpower_status``: low-power mode flag.
+    - ``ble_rssi``: BLE signal strength.
+    - ``score_info``: RTK quality scores (``BaseScore``).
+    - ``wifi_rssi``: dBm (also updated via thing/properties ``networkInfo``).
+
+    Fields populated from thing/properties JSON pushes:
+
+    - ``lat``, ``lon``: radians, from ``coordinate`` property.
+    - ``wifi_rssi``: dBm, from ``networkInfo`` property.
+    - ``wifi_sta_mac``, ``bt_mac``: MAC addresses from ``networkInfo``.
+    - ``device_version`` + ``device_firmwares``: from ``deviceVersionInfo`` blob
+      (main firmware version plus per-module versions keyed by component type).
+    - ``lora_version``: from ``loraGeneralConfig`` property (also populated from
+      HTTP API ``fetch_rtk_lora_info``).
+
+    Fields populated from ``net.toapp_networkinfo_rsp`` protobuf:
+
+    - ``wifi_ssid``, ``wifi_mac``, ``wifi_rssi``, ``ip``, ``mask``, ``gateway``.
+    """
+
+    iot_id: str = ""
+    basestation_status: int = 0
+    connect_status_since_poweron: int = 0
+    device_version: str = ""
+    product_key: str = ""
+    # base.to_app (ResponseBasestationInfoT) sourced
+    sats_num: int = 0
+    rtk_status: int = 0
+    app_connect_type: int = 0
+    lora_scan: int = 0
+    lora_channel: int = 0
+    lora_locid: int = 0
+    lora_netid: int = 0
+    mqtt_rtk_status: int = 0
+    rtk_channel: int = 0
+    rtk_switch: int = 0
+    lowpower_status: int = 0
+    ble_rssi: int = 0
+    score_info: BaseScore | None = None
+    # thing/properties sourced
+    lat: float = 0.0
+    lon: float = 0.0
+    wifi_rssi: int = 0
+    wifi_mac: str = ""
+    bt_mac: str = ""
+    lora_version: str = ""
+    device_firmwares: DeviceFirmwares = field(default_factory=DeviceFirmwares)
+    # net.toapp_networkinfo_rsp sourced
+    wifi_ssid: str = ""
+    ip: int = 0
+    mask: int = 0
+    gateway: int = 0
+
+
+def create_device(name: str, product_key: str = "") -> "Device":
+    """Construct the appropriate :class:`Device` subclass for *name*.
+
+    Inspects the device-name prefix (and optionally *product_key*) via
+    :class:`DeviceType` and returns the correct subclass:
+    :class:`RTKBaseStationDevice` for RTK base stations,
+    :class:`PoolCleanerDevice` for Spino variants, or :class:`MowerDevice`
+    (the historical default).
+
+    *product_key* is used as a fallback when the device name alone is not
+    sufficient to identify the device family (e.g. some RTK base-station
+    variants whose names don't carry the "RTK" prefix).
+    """
+    # Local import to avoid a circular dependency between
+    # pymammotion.data.model.device and pymammotion.utility.device_type.
+    from pymammotion.utility.device_type import DeviceType
+
+    if DeviceType.is_swimming_pool(name):
+        return PoolCleanerDevice(name=name)
+    if DeviceType.is_rtk(name, product_key):
+        rtk = RTKBaseStationDevice(name=name)
+        if product_key:
+            rtk.product_key = product_key
+        return rtk
+    mower = MowerDevice(name=name)
+    if product_key:
+        # Seed product_key from the device list so it's available before any
+        # protobuf telemetry arrives; the reducer refreshes it from
+        # toapp_wifi_iot_status once a report comes in.
+        mower.mower_state.product_key = product_key
+    return mower
+
+
+# Backwards-compatible alias. The library was previously called MowingDevice
+# everywhere; the rename to MowerDevice is part of the polymorphic device-model
+# refactor (Phase B). External callers can keep using MowingDevice for now.
+MowingDevice = MowerDevice
+
+
+# Mashumaro's __init_subclass__ generates to_jsonb directly on subclasses, overwriting any
+# in-class override.  Patch after class definition so orjson can handle int dict keys
+# (e.g. HashList.area / path / obstacle which are dict[int, FrameList]).
+def _mower_device_to_jsonb(self: "MowerDevice", **kwargs: Any) -> bytes:
+    kwargs.setdefault("option", orjson.OPT_NON_STR_KEYS)
+    return orjson.dumps(self.to_dict(), **kwargs)
+
+
+def _mower_device_to_json(self: "MowerDevice", **kwargs: Any) -> str:
+    return _mower_device_to_jsonb(self, **kwargs).decode()
+
+
+MowerDevice.to_jsonb = _mower_device_to_jsonb  # type: ignore
+MowerDevice.to_json = _mower_device_to_json  # type: ignore

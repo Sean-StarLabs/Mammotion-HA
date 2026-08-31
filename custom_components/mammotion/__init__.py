@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from asyncio import CancelledError
 from contextlib import suppress
 from datetime import datetime
+from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).parent / "_vendor"))
 
 from aiohttp import ClientConnectorError
 from homeassistant.components import bluetooth

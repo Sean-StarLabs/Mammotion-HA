@@ -1,0 +1,76 @@
+import logging
+
+from bleak import BleakClient, BleakScanner, BLEDevice
+from bleak.backends.characteristic import BleakGATTCharacteristic
+
+from pymammotion.bluetooth.const import SERVICE_CHANGED_CHARACTERISTIC, UUID_NOTIFICATION_CHARACTERISTIC
+from pymammotion.event.event import BleNotificationEvent
+
+_logger = logging.getLogger(__name__)
+
+
+class MammotionBLE:
+    """Class for basic ble connections to mowers."""
+
+    client: BleakClient
+
+    def __init__(self, bleEvt: BleNotificationEvent) -> None:
+        self._bleEvt = bleEvt
+
+    async def scanForLubaAndConnect(self) -> bool:
+        """Scan for a Luba or Yuka mower via BLE and connect to the first one found."""
+        scanner = BleakScanner()
+
+        def scanCallback(device, advertising_data) -> bool:
+            # TODO: do something with incoming data
+            _logger.debug("BLE scan found device: %s", device)
+            _logger.debug("Advertising data: %s", advertising_data)
+            return bool(
+                advertising_data.local_name
+                and ("Luba-" in advertising_data.local_name or "Yuka-" in advertising_data.local_name)
+            )
+
+        device = await scanner.find_device_by_filter(scanCallback)
+        if device is not None:
+            return await self.create_client(device)
+        return False
+
+    async def create_client(self, device: BLEDevice) -> bool:
+        """Create a BleakClient for the given BLE device and connect to it."""
+        self.client = BleakClient(device.address)
+        return await self.connect()
+
+    async def connect(self) -> bool:
+        """Connect the BLE client, returning False if no client has been created."""
+        if client := self.client:
+            await client.connect()
+            return client.is_connected
+        return False
+
+    async def disconnect(self) -> bool:
+        """Disconnect the BLE client, returning False if no client has been created."""
+        if client := self.client:
+            await client.disconnect()
+            return client.is_connected
+        return False
+
+    async def notification_handler(self, _characteristic: BleakGATTCharacteristic, data: bytearray) -> None:
+        """Forward an inbound GATT notification to the BLE event handler."""
+        await self._bleEvt.BleNotification(data)
+
+    def service_changed_handler(self, characteristic: BleakGATTCharacteristic, data: bytearray) -> None:
+        """Log a service-changed notification from the device."""
+        _logger.debug("Service changed %s: %s", characteristic.description, data)
+        _logger.debug("Service changed decoded: %s", data.decode("utf-8"))
+        # BlufiNotifyData
+        # run an event handler back to somewhere
+
+    async def notifications(self) -> None:
+        """Subscribe to BLE GATT notifications on both the main and service-changed characteristics."""
+        if self.client.is_connected:
+            await self.client.start_notify(UUID_NOTIFICATION_CHARACTERISTIC, self.notification_handler)
+            await self.client.start_notify(SERVICE_CHANGED_CHARACTERISTIC, self.service_changed_handler)
+
+    def get_client(self) -> BleakClient:
+        """Return the underlying bleak client."""
+        return self.client

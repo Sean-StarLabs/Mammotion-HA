@@ -1,0 +1,323 @@
+"""Dataclass models for Mammotion direct-MQTT device properties payloads."""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Annotated, Any
+
+from mashumaro.config import BaseConfig
+from mashumaro.mixins.orjson import DataClassORJSONMixin
+from mashumaro.types import Alias
+
+
+@dataclass
+class FirmwareInfo(DataClassORJSONMixin):
+    """Firmware component descriptor with type, component, and version fields."""
+
+    t: str
+    c: str
+    v: str
+
+
+@dataclass
+class DeviceVersionInfo(DataClassORJSONMixin):
+    """Overall device version and per-module firmware list."""
+
+    dev_ver: Annotated[str, Alias("devVer")]
+    whole: int
+    fw_info: Annotated[list[FirmwareInfo], Alias("fwInfo")]
+
+    class Config(BaseConfig):
+        """Mashumaro config: accept both aliased and raw field names on deserialize."""
+
+        allow_deserialization_not_by_alias = True
+
+
+@dataclass
+class Coordinate(DataClassORJSONMixin):
+    """Geographic coordinate as longitude/latitude decimal degrees."""
+
+    lon: float
+    lat: float
+
+
+@dataclass
+class InternalNavigation(DataClassORJSONMixin):
+    """Internal navigation subsystem bandwidth breakdown."""
+
+    nav: Annotated[str, Alias("NAV")]
+    pau: Annotated[str, Alias("Pau")]
+    r_pau: Annotated[str, Alias("rPau")]
+    mcu: Annotated[str, Alias("MCU")]
+    app: Annotated[str, Alias("APP")]
+    w_slp: Annotated[str, Alias("wSlp")]
+    i_slp: Annotated[str, Alias("iSlp")]
+
+    class Config(BaseConfig):
+        """Mashumaro config: accept both aliased and raw field names on deserialize."""
+
+        allow_deserialization_not_by_alias = True
+
+
+@dataclass
+class BandwidthTraffic(DataClassORJSONMixin):
+    """Per-channel bandwidth traffic measurements for IoT, RoI, FPV, and internal navigation."""
+
+    iot: Annotated[str, Alias("IoT")]
+    roi: Annotated[str, Alias("RoI")]
+    fpv: Annotated[str, Alias("FPV")]
+    inav: InternalNavigation
+
+    class Config(BaseConfig):
+        """Mashumaro config: accept both aliased and raw field names on deserialize."""
+
+        allow_deserialization_not_by_alias = True
+
+
+@dataclass
+class TrafficPeriod(DataClassORJSONMixin):
+    """Network traffic statistics for a single time period (received, transmitted, speed)."""
+
+    r: str
+    t: str
+    s: str
+
+
+@dataclass
+class TrafficData(DataClassORJSONMixin):
+    """Aggregated traffic statistics grouped by hour, day, and month."""
+
+    upt: str
+    hour: Annotated[dict[str, TrafficPeriod], Alias("Hour")]
+    day: Annotated[dict[str, TrafficPeriod], Alias("Day")]
+    mon: Annotated[dict[str, TrafficPeriod], Alias("Mon")]
+
+    class Config(BaseConfig):
+        """Mashumaro config: accept both aliased and raw field names on deserialize."""
+
+        allow_deserialization_not_by_alias = True
+
+
+@dataclass
+class NetworkInfo(DataClassORJSONMixin):
+    """Comprehensive network information including WiFi, cellular, and traffic statistics."""
+
+    ssid: str = ""
+    wifi_sta_mac: str = ""
+    wifi_rssi: int = 0
+    bt_mac: str = ""
+    mnet_model: str = ""
+    imei: str = ""
+    fw_ver: str = ""
+    sim: str = ""
+    imsi: str = ""
+    mnet_rssi: int = 0
+    signal: int = 0
+    mnet_link: int = 0
+    mnet_option: str = ""
+    mnet_ip: str = ""
+    apn_info: str = ""
+    apn_cid: int = 0
+    used_net: int = 0
+    hub_reset: int = 0
+    mnet_dis: int = 0
+    airplane_times: int = 0
+    lsusb_num: int = 0
+    mnet_rx: str = ""
+    mnet_tx: str = ""
+    mnet_uniot: int = 0
+    mnet_un_getiot: int = 0
+    ssh_flag: str = ""
+    mileage: str = ""
+    work_time: str = ""
+    bat_cycles: str = ""
+    ip: str = ""
+    apn_num: int = 0
+    wifi_available: int = 0
+    iccid: str = ""
+    sim_source: str = ""
+    mnet_reg: str = ""
+    mnet_rsrp: str = ""
+    mnet_snr: str = ""
+    mnet_enable: int = 0
+    wt_sec: int = 0
+    b_tra: Annotated[BandwidthTraffic | None, Alias("bTra")] = None
+    bw_tra: Annotated[BandwidthTraffic | None, Alias("bwTra")] = None
+    m_tra: Annotated[TrafficData | None, Alias("mTra")] = None
+
+
+@dataclass
+class DeviceOtherInfo(DataClassORJSONMixin):
+    """Miscellaneous diagnostic information reported in the ``deviceOtherInfo`` property."""
+
+    soc_up_time: Annotated[int, Alias("socUpTime")]
+    mcu_up_time: Annotated[int, Alias("mcuUpTime")]
+    soc_loads: Annotated[str, Alias("socLoads")]
+    soc_mem_free: Annotated[int, Alias("socMemFree")]
+    soc_mem_total: Annotated[int, Alias("socMemTotal")]
+    soc_mmc_life_time: Annotated[int, Alias("socMmcLifeTime")]
+    usb_dis_cnt: Annotated[int, Alias("usbDisCnt")]
+    soc_pstore: Annotated[int, Alias("socPstore")]
+    soc_coredump: Annotated[int, Alias("socCoredump")]
+    soc_tmp: Annotated[int, Alias("socTmp")]
+    mc_mcu: Annotated[str, Alias("mcMcu")]
+    i_msg_free: Annotated[int, Alias("iMsgFree")]
+    i_msg_limit: Annotated[int, Alias("iMsgLimit")]
+    i_msg_raw: Annotated[int, Alias("iMsgRaw")]
+    i_msg_prop: Annotated[int, Alias("iMsgprop")]
+    i_msg_serv: Annotated[int, Alias("iMsgServ")]
+    i_msg_info: Annotated[int, Alias("iMsgInfo")]
+    i_msg_warn: Annotated[int, Alias("iMsgWarn")]
+    i_msg_fault: Annotated[int, Alias("iMsgFault")]
+    i_msg_ota_stage: Annotated[int, Alias("iMsgOtaStage")]
+    i_msg_protobuf: Annotated[int, Alias("iMsgProtobuf")]
+    i_msg_notify: Annotated[int, Alias("iMsgNotify")]
+    i_msg_log_prog: Annotated[int, Alias("iMsgLogProg")]
+    i_msg_biz_req: Annotated[int, Alias("iMsgBizReq")]
+    i_msg_cfg_req: Annotated[int, Alias("iMsgCfgReq")]
+    i_msg_voice: Annotated[int, Alias("iMsgVoice")]
+    i_msg_warn_code: Annotated[int, Alias("iMsgWarnCode")]
+    pb_net: Annotated[int, Alias("pbNet")]
+    pb_sys: Annotated[int, Alias("pbSys")]
+    pb_nav: Annotated[int, Alias("pbNav")]
+    pb_local: Annotated[int, Alias("pbLocal")]
+    pb_plan: Annotated[int, Alias("pbPlan")]
+    pb_e_drv: Annotated[int, Alias("pbEDrv")]
+    pb_e_sys: Annotated[int, Alias("pbESys")]
+    pb_midware: Annotated[int, Alias("pbMidware")]
+    pb_ota: Annotated[int, Alias("pbOta")]
+    pb_appl: Annotated[int, Alias("pbAppl")]
+    pb_mul: Annotated[int, Alias("pbMul")]
+    pb_other: Annotated[int, Alias("pbOther")]
+    lora_connect: Annotated[int, Alias("loraConnect")]
+    base_status: Annotated[int, Alias("Basestatus")]
+    mqtt_rtk_switch: int
+    mqtt_rtk_channel: int
+    mqtt_rtk_status: int
+    mqtt_rtcm_cnt: int
+    mqtt_conn_cnt: int
+    mqtt_disconn_cnt: int
+    mqtt_rtk_hb_flag: int
+    mqtt_rtk_hb_count: int
+    mqtt_start_cnt: int
+    mqtt_close_cnt: int
+    mqtt_rtk_ssl_fail: int
+    mqtt_rtk_wifi_config: int
+    nrtk_svc_prov: int
+    nrtk_svc_err: int
+    base_stn_id: int
+    rtk_status: int
+    charge_status: int
+    chassis_state: int
+    nav: str
+    perception: str
+    vision_proxy: str
+    iot_con_timeout: int
+    iot_con: int
+    iot_con_fail_max: str
+    iot_con_fail_min: Annotated[str, Alias("iot_con_fail_min")]
+    iot_url_count: int
+    iot_url_max: str
+    iot_url_min: str
+    iot_cn: int
+    iot_ap: int
+    iot_us: int
+    iot_eu: int
+    task_area: float
+    task_count: int
+    task_hash: str
+    systemio_boot_time: Annotated[str, Alias("systemioBootTime")]
+    dds_no_gdc: int = 0
+    tilt_degree: str = ""
+    vslam_vio: str = ""
+    ins_fusion: str = ""
+
+    class Config(BaseConfig):
+        """Mashumaro config: accept both aliased and raw field names on deserialize."""
+
+        allow_deserialization_not_by_alias = True
+
+
+@dataclass
+class CheckData(DataClassORJSONMixin):
+    """Self-test result with categorised error, warning, and OK code lists."""
+
+    result: str
+    error: Annotated[list[int], Alias("Error")]
+    warn: Annotated[list[int], Alias("Warn")]
+    ok: Annotated[list[int], Alias("OK")]
+
+    class Config(BaseConfig):
+        """Mashumaro config: accept both aliased and raw field names on deserialize."""
+
+        allow_deserialization_not_by_alias = True
+
+
+@dataclass
+class DeviceProperties(DataClassORJSONMixin):
+    """Full set of device properties received in a Mammotion direct-MQTT properties message.
+
+    Every field is optional: devices send partial ``thing.event.property.post``
+    messages carrying as few as one or two fields at a time, so any
+    individual field may be absent from any given message.
+    """
+
+    # None (not 0) when the field is absent from this partial post, so consumers
+    # can distinguish "not reported" from a genuine value of 0 (e.g. 0% battery,
+    # or deviceState 0 == MODE_NOT_ACTIVE). Mirrors the nested-object fields below.
+    device_state: Annotated[int | None, Alias("deviceState")] = None
+    battery_percentage: Annotated[int | None, Alias("batteryPercentage")] = None
+    device_version: Annotated[str, Alias("deviceVersion")] = ""
+    knife_height: Annotated[int | None, Alias("knifeHeight")] = None
+    lora_general_config: Annotated[str, Alias("loraGeneralConfig")] = ""
+    ext_mod: Annotated[str, Alias("extMod")] = ""
+    int_mod: Annotated[str, Alias("intMod")] = ""
+    iot_state: Annotated[int, Alias("iotState")] = 0
+    iot_msg_total: Annotated[int, Alias("iotMsgTotal")] = 0
+    iot_msg_hz: Annotated[int, Alias("iotMsgHz")] = 0
+    lt_mr_mod: Annotated[str, Alias("ltMrMod")] = ""
+    rt_mr_mod: Annotated[str, Alias("rtMrMod")] = ""
+    bms_hardware_version: Annotated[str, Alias("bmsHardwareVersion")] = ""
+    stm32_h7_version: Annotated[str, Alias("stm32H7Version")] = ""
+    mc_boot_version: Annotated[str, Alias("mcBootVersion")] = ""
+
+    # Nested JSON objects — None when the device did not include the field
+    # on this particular property/post.
+    device_version_info: Annotated[DeviceVersionInfo | None, Alias("deviceVersionInfo")] = None
+    coordinate: Coordinate | None = None
+    device_other_info: Annotated[DeviceOtherInfo | None, Alias("deviceOtherInfo")] = None
+    network_info: Annotated[NetworkInfo | None, Alias("networkInfo")] = None
+    check_data: Annotated[CheckData | None, Alias("checkData")] = None
+    iot_id: str = ""
+    left_motor_version: Annotated[str, Alias("leftMotorVersion")] = ""
+    right_motor_version: Annotated[str, Alias("rightMotorVersion")] = ""
+    rtk_version: Annotated[str, Alias("rtkVersion")] = ""
+    bms_version: Annotated[str, Alias("bmsVersion")] = ""
+    left_motor_boot_version: Annotated[str, Alias("leftMotorBootVersion")] = ""
+    right_motor_boot_version: Annotated[str, Alias("rightMotorBootVersion")] = ""
+
+    class Config(BaseConfig):
+        """Mashumaro config: accept raw field names and decode nested JSON-string fields."""
+
+        allow_deserialization_not_by_alias = True
+        serialization_strategy: dict[Any, dict[str, Callable[[Any], Any]]] = {  # noqa: RUF012
+            DeviceVersionInfo: {
+                "deserialize": lambda x: DeviceVersionInfo.from_json(x) if isinstance(x, str) else x,
+                "serialize": lambda x: x.to_json() if hasattr(x, "to_json") else x,
+            },
+            Coordinate: {
+                "deserialize": lambda x: Coordinate.from_json(x) if isinstance(x, str) else x,
+                "serialize": lambda x: x.to_json() if hasattr(x, "to_json") else x,
+            },
+            DeviceOtherInfo: {
+                "deserialize": lambda x: DeviceOtherInfo.from_json(x) if isinstance(x, str) else x,
+                "serialize": lambda x: x.to_json() if hasattr(x, "to_json") else x,
+            },
+            NetworkInfo: {
+                "deserialize": lambda x: NetworkInfo.from_json(x) if isinstance(x, str) else x,
+                "serialize": lambda x: x.to_json() if hasattr(x, "to_json") else x,
+            },
+            CheckData: {
+                "deserialize": lambda x: CheckData.from_json(x) if isinstance(x, str) else x,
+                "serialize": lambda x: x.to_json() if hasattr(x, "to_json") else x,
+            },
+        }

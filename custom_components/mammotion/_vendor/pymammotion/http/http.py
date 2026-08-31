@@ -1,0 +1,1229 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+from contextlib import asynccontextmanager, suppress
+import csv
+from functools import wraps
+import hashlib
+import hmac
+from http import HTTPStatus
+import json
+import logging
+import secrets
+import time
+from typing import TYPE_CHECKING, Any, TypeVar, cast
+
+from aiohttp import ClientError, ClientSession, ClientTimeout, ContentTypeError
+import jwt
+from mashumaro.exceptions import InvalidFieldValue, MissingField
+from mashumaro.mixins.orjson import DataClassORJSONMixin
+
+from pymammotion.const import (
+    APP_VERSION,
+    MAMMOTION_API_DOMAIN,
+    MAMMOTION_CLIENT_ID,
+    MAMMOTION_CLIENT_SECRET,
+    MAMMOTION_DOMAIN,
+    MAMMOTION_OAUTH2_CLIENT_ID,
+    MAMMOTION_OAUTH2_CLIENT_SECRET,
+)
+from pymammotion.http.encryption import EncryptionUtils
+from pymammotion.http.model.camera_stream import StreamSubscriptionResponse, VideoResourceResponse
+from pymammotion.http.model.http import (
+    CheckDeviceVersion,
+    DeviceInfo,
+    DeviceRecords,
+    ErrorInfo,
+    JWTTokenInfo,
+    LoginResponseData,
+    MQTTConnection,
+    Response,
+    ShareRecords,
+    UnauthorizedExceptionError,
+)
+from pymammotion.http.model.response_factory import response_factory
+from pymammotion.http.model.rtk import RTK
+from pymammotion.transport.base import AuthError, ReLoginRequiredError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
+T = TypeVar("T")
+_ModelT = TypeVar("_ModelT", bound=DataClassORJSONMixin)
+
+_LOGGER = logging.getLogger(__name__)
+
+#: Hard bound on how long a token refresh may run.  ``_refresh_lock`` — and, via
+#: ``TokenManager``, every other coroutine waiting on a credential — is held for
+#: the duration, and an aiohttp ``ClientSession`` supplied by the host (Home
+#: Assistant does supply one) carries its own timeout policy that we cannot
+#: assume is bounded.  Applied at the refresh call site so the bound holds
+#: regardless of whose session we are using.
+_REFRESH_TIMEOUT_SEC = 30.0
+
+#: Exceptions a malformed credential cache can raise while being decoded.  The cache
+#: is untrusted input: it was written by a previous (possibly older) version of the
+#: library, may have been hand-edited, and may hold live models where the schema now
+#: expects dicts.  Restoring must degrade to "no usable login" rather than propagate
+#: — see :meth:`MammotionHTTP.from_cache`.
+_CACHE_DECODE_ERRORS = (InvalidFieldValue, MissingField, ValueError, TypeError, AttributeError, jwt.PyJWTError)
+
+
+def _decode_cached(value: Any, model: type[_ModelT]) -> _ModelT | None:
+    """Return one cached field as *model*, or ``None`` when the cache does not hold one.
+
+    A cache entry is either an already-decoded model (the cache never left memory) or
+    a plain dict (it round-tripped through JSON) — and, when the cache is corrupt, it
+    may be neither.  Passing an unrecognised value straight through would plant it in
+    a typed attribute and defer the failure to whoever reads that attribute next, so
+    anything else becomes ``None`` and the caller keeps its default.
+    """
+    if isinstance(value, model):
+        return value
+    if isinstance(value, dict):
+        with suppress(*_CACHE_DECODE_ERRORS):
+            return model.from_dict(value)
+    return None
+
+
+def _token_fingerprint(token: str | None) -> str:
+    """Return a non-sensitive fingerprint of a JWT for correlating refreshes in logs.
+
+    Emits ``<jti-or-hash>@exp=<unix>`` so successive refreshes that rotate the
+    access token are visible (a new fingerprint each line) and a stale token being
+    reused is visible (the same fingerprint reappearing after a "refreshed" log).
+    Never logs the token itself.
+    """
+    if not token:
+        return "none"
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+        ident = claims.get("jti") or hashlib.sha1(token.encode(), usedforsecurity=False).hexdigest()[:8]
+        return f"{ident}@exp={claims.get('exp', '?')}"
+    except Exception:  # noqa: BLE001 — a malformed token must never break logging
+        return f"sha1:{hashlib.sha1((token or '').encode(), usedforsecurity=False).hexdigest()[:8]}"
+
+
+def sign_with_hmac_sha256(data: str, app_secret: str) -> str:
+    """Sign data with HMAC-SHA256 algorithm.
+
+    Args:
+        data: The data to sign
+        app_secret: The secret key for signing
+
+    Returns:
+        Hex string of the signature
+
+    Raises:
+        RuntimeError: If signing fails
+
+    """
+    if data is None:
+        raise ValueError("data cannot be None")
+    if app_secret is None:
+        raise ValueError("app_secret cannot be None")
+
+    try:
+        # Convert strings to bytes using UTF-8 encoding
+        data_bytes = data.encode("utf-8")
+        secret_bytes = app_secret.encode("utf-8")
+
+        # Create HMAC-SHA256 hash
+        hmac_obj = hmac.new(secret_bytes, data_bytes, hashlib.sha256)
+
+        # Get the digest
+        digest = hmac_obj.digest()
+
+        # Convert to hex string
+        return digest.hex()
+
+    except Exception as e:
+        raise RuntimeError(f"toSignWithHmacSha256 error: {e}") from e
+
+
+def create_oauth_signature(
+    login_req: dict, client_id: str, client_secret: str, token_endpoint: str, timestamp: int
+) -> str:
+    """Create OAuth signature for login request.
+
+    Args:
+        login_req: Login request data as dictionary
+        client_id: OAuth client ID
+        client_secret: OAuth client secret
+        token_endpoint: Token endpoint path
+
+    Returns:
+        HMAC-SHA256 signature
+        :param timestamp:
+
+    """
+    # Convert dict to JSON without HTML escaping (ensure_ascii=False handles this)
+    json_data = json.dumps(login_req, ensure_ascii=False, separators=(",", ":"))
+
+    # Construct the string to sign
+    str_to_sign = f"{client_id}{timestamp}{token_endpoint}{json_data}"
+
+    # Create MD5 hash of client secret
+    try:
+        # MD5 is fixed by the Mammotion oauth signature scheme; the server rejects anything else.
+        md5_hash = hashlib.md5(client_secret.encode("utf-8")).digest()  # noqa: S324
+        # Convert to hex string
+        hashed_secret = md5_hash.hex()
+    except Exception:  # noqa: BLE001 — an unsignable secret yields an empty hash, rejected upstream
+        hashed_secret = ""
+
+    # Sign with HMAC-SHA256
+    return sign_with_hmac_sha256(str_to_sign, hashed_secret)
+
+
+class MammotionHTTP:
+    """HTTP client for the Mammotion cloud API (login, device list, MQTT credentials, OTA)."""
+
+    def __init__(
+        self,
+        account: str | None = None,
+        password: str | None = None,
+        session: ClientSession | None = None,
+        ha_version: str | None = None,
+    ) -> None:
+        self.device_info: list[DeviceInfo] = []
+        self.mqtt_credentials: MQTTConnection | None = None
+        self.device_records: DeviceRecords = DeviceRecords(records=[], current=0, total=0, size=0, pages=0)
+        self.expires_in = 0.0
+        self.code = 0
+        self.msg = None
+        self._session: ClientSession | None = session  # None → new session per request
+        self.account = account
+        # Stored for callers' convenience only.  NOTHING in this class may read it:
+        # a session is minted from a password exclusively by an explicit, caller-
+        # initiated login_v2(account, password).  Reintroducing an automatic
+        # password login here would let any decorated endpoint bypass every
+        # re-auth policy above this layer — see TokenManager's terminal reauth flags.
+        self._password = password
+        self._response: Response | None = None
+        self._login_info: LoginResponseData | None = None
+        self.devices_shared_info = ShareRecords()
+        self.jwt_info: JWTTokenInfo = JWTTokenInfo("", "")
+        app_version = f"HA,2.{ha_version}" if ha_version else f"NOT HA,{APP_VERSION}"
+        # app_version = f"ALIYUN DEMO,{APP_VERSION}"  # f"HA,{ha_version}"
+        self._headers = {"User-Agent": "okhttp/4.9.3", "App-Version": app_version}
+        self.encryption_utils = EncryptionUtils()
+        # Serializes every oauth2/token exchange (ensure_token_valid,
+        # refresh_token_v2) so concurrent near-expiry callers produce ONE refresh
+        # instead of a stampede of competing rotations.
+        self._refresh_lock: asyncio.Lock = asyncio.Lock()
+        #: Fired (async) after any successful oauth2/token exchange rotates the
+        #: login session.  TokenManager wires this to mirror the rotation into its
+        #: credential snapshot and persist it — a rotation that isn't persisted
+        #: leaves the cached refresh token dead, forcing a password re-login on
+        #: the next restart.
+        self.on_login_refreshed: Callable[[], Awaitable[None]] | None = None
+
+        # Add this method to generate a 10-digit random number
+        def get_10_random() -> str:
+            """Generate a 10-digit random number as a string."""
+            return "".join([str(secrets.randbelow(10)) for _ in range(7)])
+
+        # Replace the line in the __init__ method with:
+        self.client_id = f"{int(time.time() * 1000)}_{get_10_random()}_1"
+
+    #: Default total timeout for internally-created ClientSessions.  Bounds how
+    #: long any HTTP round-trip (login, refresh, MQTT credentials, …) can take,
+    #: which in turn bounds how long ``TokenManager._lock`` is held by an
+    #: in-flight refresh.  Without this, aiohttp's 5-min default would let a
+    #: slow Mammotion server stall every other coroutine waiting on a token.
+    _DEFAULT_HTTP_TIMEOUT: ClientTimeout = ClientTimeout(total=30)
+
+    @asynccontextmanager
+    async def _client_session(self) -> AsyncIterator[ClientSession]:
+        """Yield the externally-provided session, or a fresh one that is closed after use."""
+        if self._session is not None:
+            yield self._session
+        else:
+            async with ClientSession(timeout=self._DEFAULT_HTTP_TIMEOUT) as session:
+                yield session
+
+    @classmethod
+    def from_cache(
+        cls,
+        data: dict[str, Any],
+        account: str | None = None,
+        password: str | None = None,
+        session: ClientSession | None = None,
+        ha_version: str | None = None,
+    ) -> MammotionHTTP | None:
+        """Rebuild a login session from a previously serialized credential cache.
+
+        Pure and synchronous — it performs no I/O, so the restored session is not yet
+        known to be *accepted* by the server.  Call :meth:`validate_login` for that.
+
+        Every value may be either a plain dict (the cache came back from JSON) or an
+        already-decoded model (the cache is still the in-memory one), so each field is
+        normalised on the way in.
+
+        Returns ``None`` — never raises — when the login itself is unusable: no
+        ``mammotion_data``, an undecodable one, or one carrying no access token.  A
+        corrupt cache must fall back to a fresh login, and it used to escape as a
+        ``mashumaro`` ``InvalidFieldValue`` from the middle of the Aliyun restore
+        instead.  The optional fields degrade individually: a malformed MQTT credential
+        block costs the MQTT credentials, not the whole session.
+
+        Args:
+            data:       Cache dictionary produced by ``MammotionClient.to_cache``.
+            account:    Account (email / phone) the cache belongs to.
+            password:   Account password — stored for callers only, never used here.
+            session:    Optional :class:`aiohttp.ClientSession` to reuse.
+            ha_version: Home Assistant integration version for the ``App-Version`` header.
+
+        """
+        if (mammotion_data := data.get("mammotion_data")) is None:
+            _LOGGER.debug("from_cache: no mammotion_data in cache — cannot restore a login session")
+            return None
+
+        try:
+            response = (
+                mammotion_data
+                if isinstance(mammotion_data, Response)
+                else response_factory(Response[LoginResponseData], mammotion_data)
+            )
+            login_info = _decode_cached(response.data, LoginResponseData)
+            if login_info is None or not login_info.access_token:
+                _LOGGER.warning("from_cache: cached login response carries no access token — cannot restore")
+                return None
+            # Normalise before assigning: the ``response`` setter decodes
+            # ``response.data.access_token`` directly and would trip over a dict.
+            response.data = login_info
+
+            http = cls(account, password, session=session, ha_version=ha_version)
+            http.response = response  # derives jwt_info + expires_in from the JWT exp claim
+            http.login_info = login_info
+        except _CACHE_DECODE_ERRORS:
+            _LOGGER.warning("from_cache: cached login data could not be decoded — a fresh login is required")
+            _LOGGER.debug("from_cache: decode failure detail", exc_info=True)
+            return None
+
+        # The cached JWT wins over the one the response setter derived above: it is
+        # what the live session was actually using when the cache was written.
+        if (cached_jwt := _decode_cached(data.get("mammotion_jwt_info"), JWTTokenInfo)) is not None:
+            http.jwt_info = cached_jwt
+
+        if (cached_mqtt := _decode_cached(data.get("mammotion_mqtt"), MQTTConnection)) is not None:
+            http.mqtt_credentials = cached_mqtt
+
+        if isinstance(device_list := data.get("mammotion_device_list"), list):
+            devices = [d for raw in device_list if (d := _decode_cached(raw, DeviceInfo)) is not None]
+            if devices:
+                http.device_info = devices
+
+        if (cached_records := _decode_cached(data.get("mammotion_device_records"), DeviceRecords)) is not None:
+            http.device_records = cached_records
+
+        return http
+
+    async def validate_login(self) -> bool:
+        """Confirm the restored login session is one the server still accepts.
+
+        Two steps, cheapest first:
+
+        1. :meth:`ensure_token_valid` — a local expiry check that only spends a round
+           trip when the access token is within 5 minutes of expiry.
+        2. :meth:`get_user_device_list` — the server's own verdict.  A cached token
+           can be dead long before its ``exp``: the account was logged out, signed in
+           elsewhere, or had its session rotated by another client.  None of that is
+           visible locally, so without a real call a revoked session restores as
+           healthy and only fails on the first command the user issues.
+
+        The probe is the device-list endpoint rather than a dedicated "is this token
+        live" one because it is known to exist and answer — ``/user/oauth/check``
+        returns 404 on live accounts, and treating that as a rejection made every
+        restore refresh (spending the cached refresh token) and then re-login anyway.
+        The caller needs this list moments later regardless, so it costs nothing.
+
+        Returns False when the session is genuinely unusable, so the caller can fall
+        back to a full login.  Transient network failures are deliberately NOT
+        converted to False — they propagate as their own type (``ClientError`` /
+        ``TimeoutError`` / ``ConnectionError``) so a blip cannot be mistaken for a
+        rejected login and trigger a needless password grant.
+        """
+        if self._login_info is None:
+            _LOGGER.warning("validate_login: no login session to validate — a fresh login is required")
+            return False
+        try:
+            await self.ensure_token_valid(caller="validate_login")
+        except ReLoginRequiredError as exc:
+            _LOGGER.warning("validate_login: refresh token rejected (%s) — a fresh login is required", exc)
+            return False
+
+        try:
+            await self.get_user_device_list()
+        except (UnauthorizedExceptionError, AuthError, ReLoginRequiredError) as exc:
+            # ensure_token_valid has already renewed a near-expiry token, so a
+            # rejection here is the session itself, not the clock.
+            _LOGGER.warning("validate_login: server rejected the cached session (%s) — a fresh login is required", exc)
+            return False
+        return True
+
+    @property
+    def login_info(self) -> LoginResponseData | None:
+        """Return login info, or None if not yet logged in."""
+        return self._login_info
+
+    @login_info.setter
+    def login_info(self, value: LoginResponseData | None) -> None:
+        self._login_info = value
+
+    @property
+    def _require_login_info(self) -> LoginResponseData:
+        """Return login_info, raising AuthError if not logged in."""
+        if self._login_info is None:
+            raise AuthError("Not logged in — login_info is None")
+        return self._login_info
+
+    @property
+    def response(self) -> Response | None:
+        """Return the most recent login response."""
+        return self._response
+
+    @response.setter
+    def response(self, response: Response) -> None:
+        self._response = response
+        decoded_token = jwt.decode(response.data.access_token, options={"verify_signature": False})  # type: ignore
+        if isinstance(decoded_token, dict):
+            self.jwt_info = JWTTokenInfo(iot=decoded_token.get("iot", ""), robot=decoded_token.get("robot", ""))
+            # Initialise expires_in from the JWT exp claim so the refresh_token_decorator
+            # does not fire on every request after a cache restore (exp is an absolute
+            # Unix timestamp, matching the semantics of self.expires_in).
+            self.expires_in = float(decoded_token.get("exp", 0))
+
+    @staticmethod
+    def generate_headers(token: str) -> dict:
+        """Generate Authorization headers for the given bearer token."""
+        return {"Authorization": f"Bearer {token}"}
+
+    @staticmethod
+    def retry_on_network_error(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        """Retry a method up to 3 times on transient network errors.
+
+        Catches aiohttp.ClientError and asyncio.TimeoutError between attempts.
+        Auth failures and application errors are never retried.
+        """
+        _MAX_ATTEMPTS = 3
+        _RETRY_DELAYS = (1.0, 2.0)
+
+        @wraps(func)
+        async def wrapper(self: MammotionHTTP, *args: Any, **kwargs: Any) -> T:
+            last_exc: Exception = RuntimeError("no attempts made")
+            for attempt in range(_MAX_ATTEMPTS):
+                if attempt > 0:
+                    await asyncio.sleep(_RETRY_DELAYS[attempt - 1])
+                try:
+                    return await func(self, *args, **kwargs)
+                except (TimeoutError, ClientError) as exc:
+                    last_exc = exc
+                    _LOGGER.debug("Network error on attempt %d/%d: %s", attempt + 1, _MAX_ATTEMPTS, exc)
+            raise last_exc
+
+        return wrapper
+
+    @staticmethod
+    def refresh_token_decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        """Ensure a valid access token before executing *func*.
+
+        Delegates to :meth:`ensure_token_valid` — serialized behind the shared
+        refresh lock — so N concurrent decorated calls produce at most one
+        refresh instead of a stampede of competing rotations.
+        """
+
+        @wraps(func)
+        async def wrapper(self: MammotionHTTP, *args: Any, **kwargs: Any) -> T:
+            await self.ensure_token_valid(caller=getattr(func, "__name__", "?"))
+            return await func(self, *args, **kwargs)
+
+        return wrapper
+
+    async def ensure_token_valid(self, caller: str = "") -> None:
+        """Refresh the OAuth access token if it expires within the next 5 minutes.
+
+        Serialized behind ``_refresh_lock``: concurrent callers wait for the single
+        in-flight refresh and then see the fresh token via the double-check under
+        the lock, instead of each firing their own refresh.
+
+        The refresh token is the ONLY credential used.  There is deliberately no
+        ``login_v2`` fallback: a rejected refresh token is terminal and surfaces as
+        :class:`ReLoginRequiredError` so the host can prompt the user to
+        re-authenticate.  An automatic password login here would bypass every
+        re-auth policy above this layer and, on a server-side outage, turn each
+        decorated call into a password grant.
+
+        Raises:
+            ReLoginRequiredError: The refresh token was rejected, or there is no
+                login session to refresh.  Re-authentication is required.
+            TimeoutError / ClientError / OSError / ConnectionError: The refresh
+                could not be attempted because the network or server is
+                unavailable.  Propagated as-is — the token may well still be
+                good, so callers must back off and retry rather than treat this
+                as an auth failure.
+
+        """
+        if self.expires_in >= time.time() + 300:  # 300 seconds = 5 minutes
+            return
+        async with self._refresh_lock:
+            if self.expires_in >= time.time() + 300:
+                return  # a concurrent caller refreshed while we waited on the lock
+            if self._login_info is None:
+                raise ReLoginRequiredError(self.account or "", "no login session to refresh")
+            _LOGGER.debug(
+                "ensure_token_valid[%s]: token near expiry (expires_in=%s, now=%.0f, fp=%s) — refreshing",
+                caller,
+                self.expires_in,
+                time.time(),
+                _token_fingerprint(self._login_info.access_token),
+            )
+            # Bound the lock hold time independently of the ClientSession's own
+            # timeout policy — see _REFRESH_TIMEOUT_SEC.
+            async with asyncio.timeout(_REFRESH_TIMEOUT_SEC):
+                response = await self._refresh_token_v2_locked()
+            if response.code != 0:
+                _LOGGER.warning(
+                    "ensure_token_valid[%s]: refresh token rejected (code=%s) — re-authentication required",
+                    caller,
+                    response.code,
+                )
+                raise ReLoginRequiredError(
+                    self.account or "", f"refresh token rejected by oauth2/token (code={response.code})"
+                )
+
+    async def login_by_email(self, email: str, password: str) -> Response[LoginResponseData]:
+        """Log in using email and password via the v2 OAuth endpoint."""
+        return await self.login_v2(email, password)
+
+    @refresh_token_decorator
+    async def get_all_error_codes(self) -> dict[str, ErrorInfo]:
+        """Retrieve and parse all error codes from the MAMMOTION API."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/user-server/v1/code/record/export-data",
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to fetch error codes. Status code: %s, %s", resp.status, data)
+                    return {}
+                reader = csv.DictReader(data.get("data", "").split("\n"), delimiter=",")
+                codes = {}
+                for row in reader:
+                    error_info = ErrorInfo(**cast(dict[str, Any], row))
+                    codes[error_info.code] = error_info
+                return codes
+
+        return {}
+
+    @refresh_token_decorator
+    async def refresh_authorization_token(self) -> Response:
+        """Proactively refresh the /authorization/code token.
+
+        The @refresh_token_decorator renews the OAuth access token first if it is
+        close to expiry.  Use this for scheduled / background refreshes.  For
+        reactive refreshes (after a 401 is already in hand) use
+        fetch_authorization_token() directly so the caller can ensure the access
+        token is already fresh before calling.
+        """
+        return await self.fetch_authorization_token()
+
+    async def fetch_authorization_token(self) -> Response:
+        """Call POST /authorization/code with the current access token.
+
+        Does **not** check token expiry first — the caller is responsible for
+        ensuring login_info.access_token is valid before calling this.  This is
+        the shared implementation used by both the proactive decorated path and
+        the reactive force-refresh path in TokenManager.
+        """
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_DOMAIN}/authorization/code",
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"clientId": MAMMOTION_CLIENT_ID},
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                # The /authorization/code response carries data.code (a fresh
+                # authorization *code*), and only SOMETIMES data.accessToken.  When
+                # accessToken is absent (the common case — see logs) the access token
+                # is left UNCHANGED, so this call alone does not recover an expired
+                # bearer; the access token must come from refresh_token_v2().  Logged
+                # explicitly so a "still 401 after token refresh" can be traced to a
+                # no-op authz fetch.
+                had_access_token = "accessToken" in (data.get("data") or {})
+                _LOGGER.debug(
+                    "fetch_authorization_token: code=%s, carries_accessToken=%s (access_token left fp=%s)",
+                    data.get("code"),
+                    had_access_token,
+                    _token_fingerprint(self._login_info.access_token if self._login_info else None),
+                )
+                if data.get("code") != 0:
+                    return Response(code=data.get("code"), msg="Failed to refresh token")
+                login_info = self._require_login_info
+                login_info.access_token = data["data"].get("accessToken", login_info.access_token)
+                login_info.authorization_code = data["data"].get("code", login_info.authorization_code)
+                return Response.from_dict(data)
+
+        return Response(code=200, msg="success")
+
+    @refresh_token_decorator
+    async def pair_devices_mqtt(self, mower_name: str, rtk_name: str) -> Response:
+        """Pair a mower and an RTK device together via the cloud API."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/iot/device/pairing",
+                headers=self._headers,
+                json={"mowerName": mower_name, "rtkName": rtk_name},
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                _LOGGER.debug("pair_devices_mqtt response: %s", data)
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to pair devices. Status code: %s, %s", resp.status, data)
+                    return Response(code=resp.status, msg="pair devices failed")
+                return Response.from_dict(data)
+
+        return Response(code=resp.status, msg="success")
+
+    @refresh_token_decorator
+    async def unpair_devices_mqtt(self, mower_name: str, rtk_name: str) -> Response:
+        """Unpair a mower and an RTK device via the cloud API."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/iot/device/unpairing",
+                headers=self._headers,
+                json={"mowerName": mower_name, "rtkName": rtk_name},
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                _LOGGER.debug("unpair_devices_mqtt response: %s", data)
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to unpair devices. Status code: %s, %s", resp.status, data)
+                    return Response(code=resp.status, msg="unpair devices failed")
+                return Response.from_dict(data)
+
+        return Response(code=resp.status, msg="success")
+
+    @refresh_token_decorator
+    async def net_rtk_enable(self, device_id: str) -> Response:
+        """Enable network RTK for the given device."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/iot/net-rtk/enable",
+                headers=self._headers,
+                json={"deviceId": device_id},
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                _LOGGER.debug("net_rtk_enable response: %s", data)
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to enable net RTK. Status code: %s, %s", resp.status, data)
+                    return Response(code=resp.status, msg="net rtk enable failed")
+                return Response.from_dict(data)
+
+        return Response(code=resp.status, msg="success")
+
+    @refresh_token_decorator
+    async def get_stream_subscription(self, iot_id: str, is_yuka: bool) -> Response[StreamSubscriptionResponse]:
+        # Prepare the payload with cameraStates based on is_yuka flag
+        """Fetch stream subscription data for a given IoT device."""
+
+        payload = {"deviceId": iot_id, "mode": 0, "cameraStates": []}
+
+        # Add appropriate cameraStates based on the is_yuka flag
+        # yukas have two cameras you could view [{"cameraState": 1}, {"cameraState": 0}, {"cameraState": 1}]
+        # but its not useful so ignore this and only subscribe to the front one.
+        if is_yuka:
+            payload["cameraStates"] = [{"cameraState": 1}, {"cameraState": 0}, {"cameraState": 0}]
+        else:
+            payload["cameraStates"] = [{"cameraState": 1}, {"cameraState": 0}, {"cameraState": 0}]
+
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/stream/token",
+                json=payload,
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            content_type = resp.headers.get("Content-Type") or ""
+            body = await resp.text()
+            _LOGGER.debug(
+                "stream/token response: status=%s content-type=%s body=%.500s",
+                resp.status,
+                content_type,
+                body,
+            )
+            if content_type.startswith("application/json"):
+                response = response_factory(Response[StreamSubscriptionResponse], json.loads(body))
+                if response.data is None:
+                    _LOGGER.warning(
+                        "stream/token returned JSON with no stream data (code=%s msg=%s)",
+                        response.code,
+                        response.msg,
+                    )
+                return response
+
+            _LOGGER.warning(
+                "stream/token returned non-JSON response (status=%s content-type=%s)",
+                resp.status,
+                content_type,
+            )
+            return Response(code=resp.status, msg="non-json response")
+
+    @refresh_token_decorator
+    async def get_video_resource(self, iot_id: str) -> Response[VideoResourceResponse]:
+        """Fetch video resource for a given IoT ID."""
+        async with self._client_session() as session:
+            resp = await session.get(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/video-resource/{iot_id}",
+                headers={
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to fetch video resource. Status code: %s, %s", resp.status, data)
+                    return Response(code=resp.status, msg="get video resource failed")
+                return response_factory(Response[VideoResourceResponse], data)
+
+        return Response(code=resp.status, msg="success")
+
+    @refresh_token_decorator
+    async def get_device_ota_firmware(self, iot_ids: list[str]) -> Response[list[CheckDeviceVersion]]:
+        """Check device firmware versions for a list of IoT IDs."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/devices/version/check",
+                json={"deviceIds": iot_ids},
+                headers={
+                    **self._headers,
+                    "App-Version": f"HA,{APP_VERSION}",
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "Client-Id": self.client_id,
+                    "Client-Type": "1",
+                },
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+
+                # TODO catch errors from mismatch like token expire etc
+                if resp.status == HTTPStatus.OK.value:
+                    return response_factory(Response[list[CheckDeviceVersion]], data)
+                _LOGGER.warning("Failed to fetch OTA firmware info. Status code: %s, %s", resp.status, data)
+                return Response(code=resp.status, msg="get ota firmware failed", data=[])
+
+        return Response(code=200, msg="success", data=[])
+
+    @refresh_token_decorator
+    async def start_ota_upgrade(self, iot_id: str, version: str) -> Response[str]:
+        """Initiate an OTA upgrade for a device."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/ota/device/upgrade",
+                json={"deviceId": iot_id, "version": version},
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "Client-Id": self.client_id,
+                    "Client-Type": "1",
+                },
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                # TODO catch errors from mismatch like token expire etc
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to start OTA upgrade. Status code: %s, %s", resp.status, data)
+                    return Response(code=resp.status, msg="start ota upgrade failed")
+                return response_factory(Response[str], data)
+
+        return Response(code=200, msg="success")
+
+    @refresh_token_decorator
+    async def get_rtk_devices(self) -> Response[list[RTK]]:
+        """Fetch stream subscription data from agora.io for a given IoT device."""
+        async with self._client_session() as session:
+            resp = await session.get(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/rtk/devices",
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                data = await resp.json()
+                if resp.status == HTTPStatus.OK.value:
+                    return response_factory(Response[list[RTK]], data)
+                _LOGGER.warning("Failed to fetch RTK devices. Status code: %s, %s", resp.status, data)
+                return Response(code=resp.status, msg="get rtk devices failed", data=[])
+
+        return Response(code=200, msg="success", data=[])
+
+    @refresh_token_decorator
+    async def get_user_device_list(self) -> Response[list[DeviceInfo]]:
+        """Fetch the user's owned devices (shared devices are not returned).
+
+        Raises:
+            UnauthorizedExceptionError: The server rejected the access token.  The
+                decorator above has already renewed it if it was near expiry, so a
+                401 here means the session was invalidated server-side — the token's
+                own ``exp`` cannot show that.  Raising (rather than handing back a
+                ``Response(code=401)`` nobody inspects) is what lets callers tell a
+                dead login from an empty device list.
+
+        """
+        async with self._client_session() as session:
+            resp = await session.get(
+                f"{MAMMOTION_API_DOMAIN}/device-server/v1/device/list",
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "Client-Id": self.client_id,
+                    "Client-Type": "1",
+                },
+            )
+            resp_dict = (
+                await resp.json() if (resp.headers.get("Content-Type") or "").startswith("application/json") else {}
+            )
+            # A 401 arrives either as the HTTP status or as an in-body code — same
+            # dual check mqtt_invoke makes, and for the same reason.
+            if resp.status == 401 or resp_dict.get("code") == 401:
+                _LOGGER.debug(
+                    "get_user_device_list: 401 with access_token fp=%s",
+                    _token_fingerprint(self._login_info.access_token if self._login_info else None),
+                )
+                raise UnauthorizedExceptionError("Access Token expired")
+            if resp.status != HTTPStatus.OK.value:
+                _LOGGER.warning("Failed to fetch user device list. Status code: %s, %s", resp.status, resp_dict)
+                return Response(code=resp.status, msg="get device list failed", data=[])
+            if resp_dict:
+                response = response_factory(Response[list[DeviceInfo]], resp_dict)
+                self.device_info = response.data if response.data else self.device_info
+                return response
+
+        return Response(code=200, msg="success", data=[])
+
+    @refresh_token_decorator
+    async def get_user_shared_device_page(self) -> Response[ShareRecords]:
+        """Fetch pending share invitations for the current user."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/user-server/v1/share/device/page",
+                json={"iotId": "", "owned": 0, "pageNumber": 1, "pageSize": 200, "statusList": [-1]},
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "okhttp/4.9.3",
+                },
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                resp_dict = await resp.json()
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to fetch shared devices. Status code: %s, %s", resp.status, resp_dict)
+                    return Response(code=resp.status, msg="get shared device page failed")
+                response = response_factory(Response[ShareRecords], resp_dict)
+                self.devices_shared_info = response.data if response.data else self.devices_shared_info
+                return response
+
+        return Response(code=200, msg="success")
+
+    @refresh_token_decorator
+    async def confirm_share(self, batch_id: str, record_ids: list[int], agree: int = 1) -> Response[dict | bool]:
+        """Accept or reject share invitations for a single batch.
+
+        agree=1 accepts, agree=0 rejects.  record_ids are the integer values of
+        ShareRecord.record_id for all records in the batch.
+        """
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_API_DOMAIN}/user-server/v1/share/device/confirm",
+                json={"agree": agree, "batchId": batch_id, "recordIds": record_ids},
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "okhttp/4.9.3",
+                },
+            )
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                resp_dict = await resp.json()
+                if resp.status != HTTPStatus.OK.value:
+                    _LOGGER.warning("Failed to confirm share. Status code: %s, %s", resp.status, resp_dict)
+                    return Response(code=resp.status, msg="confirm share failed")
+                return response_factory(Response[dict | bool], resp_dict)
+
+        return Response(code=200, msg="success")
+
+    @refresh_token_decorator
+    async def get_user_device_page(self) -> Response[DeviceRecords]:
+        """Fetch the device list for a user, from either the new API or the newer-device API."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{self.jwt_info.iot}/v1/user/device/page",
+                json={
+                    "iotId": "",
+                    "pageNumber": 1,
+                    "pageSize": 100,
+                },
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "okhttp/4.9.3",
+                    "Client-Id": self.client_id,
+                    "Client-Type": "1",
+                },
+            )
+            if resp.status != 200:
+                return Response.from_dict({"code": resp.status, "msg": "get device list failed"})
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                resp_dict = await resp.json()
+                response = response_factory(Response[DeviceRecords], resp_dict)
+                self.device_records = response.data if response.data else self.device_records
+                return response
+
+        return Response(code=200, msg="success")
+
+    @retry_on_network_error
+    @refresh_token_decorator
+    async def get_mqtt_credentials(self) -> Response[MQTTConnection]:
+        """Get mammotion mqtt credentials."""
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{self.jwt_info.iot}/v1/mqtt/auth/jwt",
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "okhttp/4.9.3",
+                },
+            )
+            if resp.status != 200:
+                return Response.from_dict({"code": resp.status, "msg": "get mqtt failed"})
+            if (resp.headers.get("Content-Type") or "").startswith("application/json"):
+                resp_dict = await resp.json()
+                response = response_factory(Response[MQTTConnection], resp_dict)
+                self.mqtt_credentials = response.data
+                return response
+
+        return Response(code=200, msg="success")
+
+    async def mqtt_invoke(self, content: str, device_name: str, iot_id: str) -> Response[dict]:
+        """Send mqtt commands to devices."""
+        _LOGGER.debug(f"mqtt invoke content: {content}, {self.jwt_info.iot}")
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{self.jwt_info.iot}/v1/mqtt/rpc/thing/service/invoke",
+                json={
+                    "args": {"content": content},
+                    "deviceName": device_name,
+                    "identifier": "device_protobuf_sync_service",
+                    "iotId": iot_id,
+                    "productKey": "",
+                },
+                headers={
+                    **self._headers,
+                    "Authorization": f"Bearer {self._require_login_info.access_token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "okhttp/4.9.3",
+                    "Client-Id": self.client_id,
+                    "Client-Type": "1",
+                    "Request-Id": "".join([str(secrets.randbelow(10)) for _ in range(21)]),
+                    "Accept-Language": "en-US",
+                    "L-T-Z": f"{int(time.time())}/0/0",
+                },
+            )
+            resp_dict = await resp.json()
+        # Check auth failure BEFORE the generic non-200 bail-out: a 401 can arrive as
+        # an HTTP status or as an in-body code, and it must surface as
+        # UnauthorizedException (which drives the force-refresh path) rather than a
+        # plain Response(code=401).
+        if resp.status == 401 or resp_dict.get("code") == 401:
+            _LOGGER.debug(
+                "mqtt_invoke: 401 for iot_id=%s with access_token fp=%s",
+                iot_id,
+                _token_fingerprint(self._login_info.access_token if self._login_info else None),
+            )
+            raise UnauthorizedExceptionError("Access Token expired")
+        if resp.status != 200:
+            return Response.from_dict({"code": resp.status, "msg": "invoke mqtt failed"})
+        if resp_dict.get("code") != 0:
+            return Response.from_dict({"code": resp_dict.get("code"), "msg": resp_dict.get("msg")})
+
+        return response_factory(Response[dict], resp_dict)
+
+    async def logout(self) -> None:
+        """Invalidate the current session by calling the v3 logout endpoint."""
+        if self.login_info is None:
+            return
+        async with self._client_session() as session:
+            await session.post(
+                f"{MAMMOTION_API_DOMAIN}/user-server/v3/user/logout",
+                headers=self.generate_headers(self._require_login_info.access_token),
+            )
+        self.login_info = None
+        self._headers.pop("Authorization", None)
+        # Any caller reading these after a logout should see "no creds" rather
+        # than a JWT/expiry bound to the previous login.  Without this, a stale
+        # MQTT JWT survives the logout and gets re-used until the next explicit
+        # get_mqtt_credentials() call.
+        self.mqtt_credentials = None
+        self.expires_in = 0.0
+        self.jwt_info = JWTTokenInfo("", "")
+
+    async def _fire_login_refreshed(self) -> None:
+        """Notify the on_login_refreshed listener that the login session rotated.
+
+        Listener exceptions are swallowed — persistence problems must never fail
+        the refresh that just succeeded.
+        """
+        if self.on_login_refreshed is not None:
+            with suppress(Exception):
+                await self.on_login_refreshed()
+
+    async def login(self, account: str, password: str) -> Response[LoginResponseData]:
+        """Log in to the service using the provided account and password."""
+        self.account = account
+        self._password = password
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_DOMAIN}/oauth/token",
+                headers={
+                    **self._headers,
+                    "Encrypt-Key": self.encryption_utils.encrypt_by_public_key() or "",
+                    "Decrypt-Type": "3",
+                    "Ec-Version": "v1",
+                },
+                params={
+                    "username": self.encryption_utils.encryption_by_aes(account) or "",
+                    "password": self.encryption_utils.encryption_by_aes(password) or "",
+                    "client_id": self.encryption_utils.encryption_by_aes(MAMMOTION_CLIENT_ID) or "",
+                    "client_secret": self.encryption_utils.encryption_by_aes(MAMMOTION_CLIENT_SECRET) or "",
+                    "grant_type": self.encryption_utils.encryption_by_aes("password") or "",
+                },
+            )
+            if resp.status != 200:
+                _LOGGER.debug("login failed (status=%s): %s", resp.status, await resp.text())
+                return Response.from_dict({"code": resp.status, "msg": "Login failed"})
+            data = await resp.json()
+        login_response = response_factory(Response[LoginResponseData], data)
+        if login_response is None or login_response.data is None:
+            _LOGGER.debug("login_v2 returned empty response: %s", login_response)
+            return Response.from_dict({"code": resp.status, "msg": "Login failed"})
+        self.login_info = login_response.data
+        self.expires_in = login_response.data.expires_in + time.time()
+        self._headers["Authorization"] = (
+            f"Bearer {self._require_login_info.access_token}" if login_response.data else ""
+        )
+        self.response = login_response
+        self.msg = login_response.msg
+        self.code = login_response.code
+        # TODO catch errors from mismatch user / password elsewhere
+        # Assuming the data format matches the expected structure
+        return login_response
+
+    async def refresh_token_v2(self) -> Response[LoginResponseData]:
+        """Refresh the access token via grant_type=refresh_token; serialized behind the shared refresh lock.
+
+        This is the ONLY way an access token is renewed automatically.  A
+        non-zero ``code`` in the returned response means the refresh token was
+        rejected and re-authentication is required — there is no password
+        fallback.
+
+        Raises:
+            ConnectionError: On 408/429/5xx or a non-JSON body — the server is
+                unavailable or throttling, not rejecting the refresh token.
+
+        """
+        async with self._refresh_lock, asyncio.timeout(_REFRESH_TIMEOUT_SEC):
+            return await self._refresh_token_v2_locked()
+
+    async def _refresh_token_v2_locked(self) -> Response[LoginResponseData]:
+        """Body of :meth:`refresh_token_v2`; caller holds ``_refresh_lock``."""
+
+        timestamp = int(time.time() * 1000)
+
+        refresh_request = {
+            # Key order matters: create_oauth_signature signs the serialized JSON,
+            # so this must match the order the Android app builds the same request
+            # in (SpecialCodeIntercepter.getRefreshTokenRequest: client_id,
+            # grant_type, refresh_token) for the two signatures to agree.
+            "client_id": MAMMOTION_OAUTH2_CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": self._require_login_info.refresh_token,
+        }
+
+        oauth_signature = create_oauth_signature(
+            login_req=refresh_request,
+            client_id=MAMMOTION_OAUTH2_CLIENT_ID,
+            client_secret=MAMMOTION_OAUTH2_CLIENT_SECRET,
+            token_endpoint="/oauth2/token",  # noqa: S106 — a URL path, not a credential
+            timestamp=timestamp,
+        )
+
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_DOMAIN}/oauth2/token",
+                headers={
+                    **self._headers,
+                    # Same trio as login_v2, and for the same reason: this is the
+                    # id.mammotion.com/oauth2/token host, where Ma-App-Key names the
+                    # OAuth2 client whose secret keys Ma-Signature.  The Android app
+                    # sends exactly these three on both the password grant and the
+                    # refresh (SpecialCodeIntercepter.getRefreshTokenRequest).
+                    # "Ma-Iot-*" belongs to the other token system
+                    # (api-iot-region.mammotion.com) and was never right here.
+                    "Ma-App-Key": MAMMOTION_OAUTH2_CLIENT_ID,
+                    "Ma-Signature": oauth_signature,
+                    "Ma-Timestamp": str(timestamp),
+                    "Client-Id": self.client_id,
+                    "Client-Type": "1",
+                },
+                params={
+                    **refresh_request,
+                },
+            )
+            if resp.status in (408, 429) or resp.status >= 500:
+                # Server unavailable or throttling — this is NOT a refresh-token
+                # rejection; raise a transient error so callers back off instead
+                # of falling back to a password login (login_v2).
+                msg = f"oauth2/token refresh returned HTTP {resp.status}"
+                raise ConnectionError(msg)
+            try:
+                data = await resp.json()
+            except ContentTypeError as exc:
+                msg = f"oauth2/token refresh returned non-JSON body (status={resp.status})"
+                raise ConnectionError(msg) from exc
+        refresh_response = response_factory(Response[LoginResponseData], data)
+        if refresh_response.data is None:
+            # Return the API's own code and message.  Substituting the HTTP status here
+            # discarded the only useful part of the answer: this endpoint reports
+            # failures as 200 + a body code, so callers and logs saw "code=200" for what
+            # was actually e.g. 40102 "Refresh token has expired" — which is the one
+            # thing that tells you the token was superseded rather than merely refused.
+            _LOGGER.warning(
+                "refresh_token_v2: refresh rejected (status=%s, code=%s, msg=%s)",
+                resp.status,
+                refresh_response.code,
+                refresh_response.msg,
+            )
+            return refresh_response
+        _LOGGER.debug(
+            "refresh_token_v2: OK — access_token %s -> %s",
+            _token_fingerprint(self._login_info.access_token if self._login_info else None),
+            _token_fingerprint(refresh_response.data.access_token),
+        )
+        self.login_info = refresh_response.data
+        self.expires_in = refresh_response.data.expires_in + time.time()
+        self._headers["Authorization"] = (
+            f"Bearer {self._require_login_info.access_token}" if refresh_response.data else ""
+        )
+        self.response = refresh_response
+        self.msg = refresh_response.msg
+        self.code = refresh_response.code
+        await self._fire_login_refreshed()
+        return refresh_response
+
+    async def login_v2(self, account: str, password: str) -> Response[LoginResponseData]:
+        """Log in with account + password — the only password grant in this library.
+
+        Reachable only from an explicit, caller-initiated login; no refresh path may
+        call it (see :meth:`ensure_token_valid`).
+
+        On request signing: the ``Ma-App-Key`` / ``Ma-Signature`` / ``Ma-Timestamp``
+        trio below matches the Android app for this host (id.mammotion.com), where
+        ``Ma-App-Key`` names the OAuth2 client whose secret keys the signature.
+        :meth:`refresh_token_v2` now sends the same three, as the app does on both
+        grants.
+
+        Note the server does not appear to enforce any of it strictly: refresh
+        worked for a long time while sending ``Ma-Iot-Signature`` (a header
+        belonging to the *other* token system) and no app key at all, and this
+        request's signature payload orders its JSON keys differently from the
+        app's.  Worth remembering before attributing an auth failure to the
+        signature — it is rarely the cause.
+        """
+        self.account = account
+        self._password = password
+
+        timestamp = int(time.time() * 1000)
+
+        login_request = {
+            "username": account,
+            "password": base64.b64encode(password.encode("utf-8")).decode("utf-8"),
+            "client_id": MAMMOTION_OAUTH2_CLIENT_ID,
+            "grant_type": "password",
+            "authType": "0",
+        }
+
+        oauth_signature = create_oauth_signature(
+            login_req=login_request,
+            client_id=MAMMOTION_OAUTH2_CLIENT_ID,
+            client_secret=MAMMOTION_OAUTH2_CLIENT_SECRET,
+            token_endpoint="/oauth2/token",  # noqa: S106 — a URL path, not a credential
+            timestamp=timestamp,
+        )
+
+        async with self._client_session() as session:
+            resp = await session.post(
+                f"{MAMMOTION_DOMAIN}/oauth2/token",
+                headers={
+                    **self._headers,
+                    "Ma-App-Key": MAMMOTION_OAUTH2_CLIENT_ID,
+                    "Ma-Signature": oauth_signature,
+                    "Ma-Timestamp": str(timestamp),
+                    "Client-Id": self.client_id,
+                    "Client-Type": "1",
+                },
+                params={
+                    **login_request,
+                },
+            )
+            if resp.status in (408, 429) or resp.status >= 500:
+                # Server unavailable or throttling — not a credential rejection;
+                # raise a transient error so callers back off and retry rather
+                # than treating the outage as an auth failure.
+                msg = f"oauth2/token login returned HTTP {resp.status}"
+                raise ConnectionError(msg)
+            if resp.status != 200:
+                return Response.from_dict({"code": resp.status, "msg": "Login failed"})
+            data = await resp.json()
+        if data.get("code") != 0:
+            return Response.from_dict({"code": resp.status, "msg": data.get("msg") or "Login failed"})
+        login_response = response_factory(Response[LoginResponseData], data)
+        if login_response is None or login_response.data is None:
+            return Response.from_dict({"code": resp.status, "msg": "Login failed"})
+        self.login_info = login_response.data
+        self.expires_in = login_response.data.expires_in + time.time()
+        self._headers["Authorization"] = (
+            f"Bearer {self._require_login_info.access_token}" if login_response.data else ""
+        )
+        self.response = login_response
+        self.msg = login_response.msg
+        self.code = login_response.code
+        await self._fire_login_refreshed()
+        # TODO catch errors from mismatch user / password elsewhere
+        # Assuming the data format matches the expected structure
+        return login_response
