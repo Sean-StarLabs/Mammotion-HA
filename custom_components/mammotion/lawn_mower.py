@@ -6,6 +6,7 @@ from copy import copy
 from datetime import time
 from typing import Any, cast
 
+import betterproto2
 import voluptuous as vol
 from homeassistant.components.lawn_mower import DOMAIN as LAWN_MOWER_DOMAIN
 from homeassistant.components.lawn_mower import (
@@ -387,8 +388,6 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
     async def async_cancel(self) -> None:
         """Cancel Job."""
-        trans_key = "pause_failed"
-
         await self.coordinator.async_ensure_fresh_state()
         mode = self.rpt_dev_status.sys_status
         if mode is None:
@@ -398,32 +397,66 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
 
         if mode in (
             WorkMode.MODE_PAUSE,
+            WorkMode.MODE_CHARGING_PAUSE,
             WorkMode.MODE_WORKING,
             WorkMode.MODE_RETURNING,
         ):
             try:
-                if mode != WorkMode.MODE_PAUSE:
-                    if mode == WorkMode.MODE_WORKING:
-                        trans_key = "pause_failed"
-                        await self.coordinator.async_send_command("pause_execute_task")
-                    if mode == WorkMode.MODE_RETURNING:
-                        trans_key = "dock_failed"
-                        await self.coordinator.async_send_command(
-                            "cancel_return_to_dock"
-                        )
-                    await self.coordinator.async_request_report_snapshot()
-                    mode = self.rpt_dev_status.sys_status
+                if mode == WorkMode.MODE_WORKING:
+                    await self._async_send_cancel_control(
+                        "pause_execute_task",
+                        action=2,
+                        translation_key="pause_failed",
+                        allow_missing_ack=True,
+                    )
+                elif mode == WorkMode.MODE_RETURNING:
+                    await self._async_send_cancel_control(
+                        "cancel_return_to_dock",
+                        action=12,
+                        translation_key="dock_cancel_failed",
+                        allow_missing_ack=True,
+                    )
 
-                if mode == WorkMode.MODE_PAUSE:
-                    trans_key = "pause_failed"
-                    await self.coordinator.async_send_command("cancel_job")
-
-            except COMMAND_EXCEPTIONS as exc:
-                raise HomeAssistantError(
-                    translation_domain=DOMAIN, translation_key=trans_key
-                ) from exc
+                await self._async_send_cancel_control(
+                    "cancel_job",
+                    action=4,
+                    translation_key="command_failed",
+                )
             finally:
                 await self.coordinator.async_request_report_snapshot()
+
+    async def _async_send_cancel_control(
+        self,
+        command: str,
+        *,
+        action: int,
+        translation_key: str,
+        allow_missing_ack: bool = False,
+    ) -> None:
+        """Send and validate one task-control step in cancellation."""
+        try:
+            response = await self.coordinator.async_send_and_wait(
+                command,
+                "todev_taskctrl_ack",
+            )
+        except COMMAND_EXCEPTIONS as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key=translation_key,
+            ) from exc
+        if response is None and allow_missing_ack:
+            return
+        try:
+            field, ack = betterproto2.which_one_of(response.nav, "SubNavMsg")
+        except AttributeError, TypeError, ValueError:
+            field, ack = None, None
+        if field != "todev_taskctrl_ack" or (
+            int(ack.action) != action or int(ack.result) != 0
+        ):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key=translation_key,
+            )
 
     async def async_start_stop_blades(self, **kwargs: Any) -> None:
         """Start/Stop Blades."""
