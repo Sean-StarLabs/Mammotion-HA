@@ -459,7 +459,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         command: str,
         expected_field: str,
         **kwargs: Any,
-    ) -> None:
+    ) -> Any | None:
         """Send a command and wait for response with standard exception handling.
 
         Handles credential expiry, gateway/transport timeouts, and device-offline
@@ -471,7 +471,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
             return
 
         try:
-            await self.manager.send_command_and_wait(
+            return await self.manager.send_command_and_wait(
                 self.device_name,
                 command,
                 expected_field,
@@ -509,6 +509,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
                 "BLE connection cancelled (no available slot) for %s — skipping",
                 self.device_name,
             )
+        return None
 
     @staticmethod
     def device_offline(device: MowingDevice | RTKBaseStationDevice) -> None:
