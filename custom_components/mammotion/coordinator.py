@@ -92,6 +92,10 @@ from .const import (
     LOGGER,
     NO_REQUEST_MODES,
 )
+from .operation_settings import (
+    deserialize_operation_settings,
+    serialize_operation_settings,
+)
 
 if TYPE_CHECKING:
     from . import MammotionConfigEntry
@@ -148,6 +152,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         )
         self.manager: MammotionClient = mammotion
         self._operation_settings = OperationSettings()
+        self._operation_settings_restored = False
         self.update_failures = 0
         self._stream_data: Response[StreamSubscriptionResponse] | None = (
             None  # Stream data [Agora]
@@ -1275,6 +1280,19 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         """Return operation settings for planning."""
         return self._operation_settings
 
+    @property
+    def operation_settings_restored(self) -> bool:
+        """Return whether the dedicated settings snapshot was restored."""
+        return self._operation_settings_restored
+
+    @callback
+    def async_save_operation_settings(self) -> None:
+        """Queue operation settings for persistence without blocking the UI."""
+        self._store.async_update_operation_settings(
+            self.device_name,
+            serialize_operation_settings(self._operation_settings),
+        )
+
     async def async_modify_plan_if_mowing(self) -> None:
         """Re-plan the current mow route if the device is actively mowing."""
         _mdata = cast(MowingDevice, self.data)
@@ -1286,6 +1304,11 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
 
     async def async_restore_data(self) -> None:
         """Restore saved data."""
+        if restored_settings := deserialize_operation_settings(
+            self._store.operation_settings(self.device_name)
+        ):
+            self._operation_settings = restored_settings
+            self._operation_settings_restored = True
         restored_data: Mapping[str, Any] | None = await self._store.async_device_data(
             self.device_name
         )

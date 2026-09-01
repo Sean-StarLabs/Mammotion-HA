@@ -117,6 +117,7 @@ NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "start_progress", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.start_progress,
     ),
     MammotionConfigNumberEntityDescription(
         key="cutting_angle",
@@ -127,6 +128,7 @@ NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.toward,
     ),
     MammotionConfigNumberEntityDescription(
         key="toward_included_angle",
@@ -137,6 +139,7 @@ NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward_included_angle", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.toward_included_angle,
     ),
 )
 
@@ -151,6 +154,7 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "collect_grass_frequency", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.collect_grass_frequency,
     ),
 )
 
@@ -186,6 +190,7 @@ NUMBER_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "speed", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.speed,
     ),
     MammotionConfigNumberEntityDescription(
         key="path_spacing",
@@ -197,6 +202,7 @@ NUMBER_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "channel_width", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.channel_width,
     ),
 )
 
@@ -304,6 +310,7 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
         elif (
             self.entity_description.set_fn is not None
             and self._attr_native_value is not None
+            and not self.coordinator.operation_settings_restored
         ):
             self.entity_description.set_fn(self.coordinator, self._attr_native_value)
 
@@ -321,11 +328,14 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
             self.entity_description.set_fn(self.coordinator, value)
         if self.entity_description.set_async_fn is not None:
             await self.entity_description.set_async_fn(self.coordinator, value)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Restore last saved value when entity is added to hass."""
         await super().async_added_to_hass()
+        if self.coordinator.operation_settings_restored:
+            return
         last_number_data = await self.async_get_last_number_data()
         if (last_number_data is not None) and (
             last_number_data.native_value is not None
@@ -335,6 +345,7 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
                 self.entity_description.set_fn(
                     self.coordinator, cast(float, self._attr_native_value)
                 )
+                self.coordinator.async_save_operation_settings()
 
 
 class MammotionWorkingNumberEntity(MammotionConfigNumberEntity):
@@ -386,6 +397,7 @@ class MammotionWorkingNumberEntity(MammotionConfigNumberEntity):
             self.entity_description.set_fn(self.coordinator, value)
         if self.entity_description.set_async_fn is not None:
             await self.entity_description.set_async_fn(self.coordinator, value)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
 
