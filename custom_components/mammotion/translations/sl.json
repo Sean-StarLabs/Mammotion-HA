@@ -66,14 +66,8 @@
   },
   "entity": {
     "sensor": {
-      "error_1_message": {
+      "latest_error": {
         "name": "Zadnja napaka"
-      },
-      "error_1_time": {
-        "name": "Čas zadnje napake"
-      },
-      "error_1_code": {
-        "name": "Koda zadnje napake"
       },
       "battery_percent": {
         "name": "Baterija"
