@@ -1,5 +1,6 @@
 """Serialization helpers for mower operation settings."""
 
+from dataclasses import replace
 from typing import Any
 
 from mashumaro.exceptions import InvalidFieldValue
@@ -15,6 +16,11 @@ def option_for_value(
     return next((option for option in options if values.get(option) == value), None)
 
 
+def clone_operation_settings(settings: OperationSettings) -> OperationSettings:
+    """Return an independent settings snapshot for route generation."""
+    return replace(settings, areas=list(settings.areas))
+
+
 def retain_known_areas(
     settings: OperationSettings, known_area_hashes: set[int]
 ) -> bool:
@@ -24,6 +30,13 @@ def retain_known_areas(
         return False
     settings.areas = retained
     return True
+
+
+def should_restore_number_state(
+    *, route_setting: bool, operation_settings_restored: bool
+) -> bool:
+    """Return whether a number should use its legacy entity-state fallback."""
+    return not route_setting or not operation_settings_restored
 
 
 def serialize_operation_settings(settings: OperationSettings) -> dict[str, Any]:

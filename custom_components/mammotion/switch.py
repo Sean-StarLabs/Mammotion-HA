@@ -32,6 +32,7 @@ from .area_identity import (
     merge_registry_entry_collision,
 )
 from .const import DOMAIN
+from .control_state import route_setting_available
 from .coordinator import (
     MammotionBaseUpdateCoordinator,
     MammotionReportUpdateCoordinator,
@@ -427,6 +428,14 @@ class MammotionConfigSwitchEntity(MammotionBaseEntity, SwitchEntity, RestoreEnti
             self.coordinator.operation_settings, self.entity_description.key, False
         )
 
+    @property
+    def available(self) -> bool:
+        """Return whether this next-task setting can currently be changed."""
+        return super().available and route_setting_available(
+            self.coordinator.data.report_data.dev.sys_status,
+            runtime_supported=False,
+        )
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the entity on."""
         self._attr_is_on = True
@@ -580,8 +589,11 @@ class MammotionConfigAreaSwitchEntity(MammotionBaseEntity, SwitchEntity, Restore
 
     @property
     def available(self) -> bool:
-        """Return True if entity is available."""
-        return True
+        """Return whether task area selection can currently be changed."""
+        return super().available and route_setting_available(
+            self.coordinator.data.report_data.dev.sys_status,
+            runtime_supported=False,
+        )
 
 
 @callback

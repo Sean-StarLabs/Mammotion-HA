@@ -98,6 +98,7 @@ from .const import (
     NO_REQUEST_MODES,
 )
 from .operation_settings import (
+    clone_operation_settings,
     deserialize_operation_settings,
     serialize_operation_settings,
 )
@@ -1144,32 +1145,33 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         self, operation_settings: OperationSettings
     ) -> GenerateRouteInformation:
         """Generate route information."""
+        route_settings = clone_operation_settings(operation_settings)
         device: MowingDevice = cast(MowingDevice, self.data)
         if device.report_data.dev:
             dev = device.report_data.dev
             if dev.collector_status.collector_installation_status == 0:
-                operation_settings.is_dump = False
+                route_settings.is_dump = False
 
         if DeviceType.is_yuka(self.device_name):
-            operation_settings.blade_height = -10
+            route_settings.blade_height = -10
 
         route_information = GenerateRouteInformation(
-            one_hashs=list(operation_settings.areas),
-            rain_tactics=operation_settings.rain_tactics,
-            speed=operation_settings.speed,
-            ultra_wave=operation_settings.ultra_wave,  # touch no touch etc
-            toward=operation_settings.toward,  # is just angle (route angle)
-            toward_included_angle=operation_settings.toward_included_angle  # demond_angle
-            if operation_settings.channel_mode == 1
+            one_hashs=list(route_settings.areas),
+            rain_tactics=route_settings.rain_tactics,
+            speed=route_settings.speed,
+            ultra_wave=route_settings.ultra_wave,  # touch no touch etc
+            toward=route_settings.toward,  # is just angle (route angle)
+            toward_included_angle=route_settings.toward_included_angle  # demond_angle
+            if route_settings.channel_mode == 1
             else 0,  # crossing angle relative to grid
-            toward_mode=operation_settings.toward_mode,
-            blade_height=operation_settings.blade_height,
-            channel_mode=operation_settings.channel_mode,  # single, double, segment or none (route mode)
-            channel_width=operation_settings.channel_width,  # path space
-            job_mode=operation_settings.job_mode,  # taskMode grid or border first
-            edge_mode=operation_settings.mowing_laps,  # perimeter/mowing laps
-            path_order=create_path_order(operation_settings, self.device_name),
-            obstacle_laps=operation_settings.obstacle_laps,
+            toward_mode=route_settings.toward_mode,
+            blade_height=route_settings.blade_height,
+            channel_mode=route_settings.channel_mode,  # single, double, segment or none (route mode)
+            channel_width=route_settings.channel_width,  # path space
+            job_mode=route_settings.job_mode,  # taskMode grid or border first
+            edge_mode=route_settings.mowing_laps,  # perimeter/mowing laps
+            path_order=create_path_order(route_settings, self.device_name),
+            obstacle_laps=route_settings.obstacle_laps,
         )
 
         if DeviceType.is_luba1(self.device_name):
@@ -1231,25 +1233,33 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         )
 
     async def async_modify_plan_route(
-        self, operation_settings: OperationSettings
-    ) -> bool | None:
+        self,
+        operation_settings: OperationSettings,
+        *,
+        preempt_reads: bool = False,
+    ) -> bool:
         """Modify plan mow."""
 
+        route_settings = clone_operation_settings(operation_settings)
         if work := cast(MowingDevice, self.data).work:
-            operation_settings.areas = list(dict.fromkeys(work.zone_hashs))
-            operation_settings.toward = work.toward
-            operation_settings.toward_mode = work.toward_mode
-            operation_settings.toward_included_angle = work.toward_included_angle
-            operation_settings.mowing_laps = work.edge_mode
-            operation_settings.job_mode = work.job_mode
-            operation_settings.job_id = work.job_id
-            operation_settings.job_version = work.job_ver
+            route_settings.areas = list(dict.fromkeys(work.zone_hashs))
+            route_settings.toward = work.toward
+            route_settings.toward_mode = work.toward_mode
+            route_settings.toward_included_angle = work.toward_included_angle
+            route_settings.mowing_laps = work.edge_mode
+            route_settings.job_mode = work.job_mode
+            route_settings.job_id = work.job_id
+            route_settings.job_version = work.job_ver
 
-        route_information = self.generate_route_information(operation_settings)
+        route_information = self.generate_route_information(route_settings)
 
-        return await self.async_send_command(
-            "modify_route_information", generate_route_information=route_information
+        response = await self.async_send_and_wait(
+            "modify_route_information",
+            "bidire_reqconver_path",
+            preempt_reads=preempt_reads,
+            generate_route_information=route_information,
         )
+        return self.route_response_succeeded(response)
 
     async def start_task(self, plan_id: str) -> None:
         """Start task."""
@@ -1365,13 +1375,18 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         self.async_update_listeners()
 
     async def async_modify_plan_if_mowing(self) -> None:
-        """Re-plan the current mow route if the device is actively mowing."""
+        """Apply operation settings to the active route."""
         _mdata = cast(MowingDevice, self.data)
-        if (
-            int(_mdata.report_data.work.bp_hash) in _mdata.work.zone_hashs
-            and (_mdata.report_data.work.area >> 16) != 100
+        if _mdata.report_data.dev.sys_status != WorkMode.MODE_WORKING:
+            return
+        if not await self.async_modify_plan_route(
+            self.operation_settings,
+            preempt_reads=True,
         ):
-            await self.async_modify_plan_route(self.operation_settings)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+            )
 
     async def async_restore_data(self) -> None:
         """Restore saved data."""
