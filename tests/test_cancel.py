@@ -1,12 +1,16 @@
 """Tests for acknowledged mower cancellation."""
 
+# The command transaction is intentionally tested through its private boundary.
+# ruff: noqa: SLF001
+
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, PropertyMock, call, patch
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
@@ -49,15 +53,22 @@ def _ack(action: int, result: int = 0) -> LubaMsg:
     )
 
 
-def _entity(mode: WorkMode, *responses: LubaMsg | None) -> MammotionLawnMowerEntity:
+def _entity(mode: WorkMode, *responses: LubaMsg) -> MammotionLawnMowerEntity:
     entity = object.__new__(MammotionLawnMowerEntity)
+    entity._command_lock = asyncio.Lock()
+    entity._active_start_cancel = None
+    entity._start_cancel_events = set()
+    entity._start_dispatching = False
+    entity._start_dispatched = False
     entity.coordinator = SimpleNamespace(
         data=SimpleNamespace(
             report_data=SimpleNamespace(
                 dev=SimpleNamespace(sys_status=mode),
+                work=SimpleNamespace(bp_info=1),
             )
         ),
         async_ensure_fresh_state=AsyncMock(),
+        async_ensure_fresh_report_data=AsyncMock(return_value=True),
         async_send_and_wait=AsyncMock(side_effect=responses),
         async_request_report_snapshot=AsyncMock(),
     )
@@ -67,42 +78,43 @@ def _entity(mode: WorkMode, *responses: LubaMsg | None) -> MammotionLawnMowerEnt
 @pytest.mark.asyncio
 async def test_cancel_active_job_validates_pause_then_cancel() -> None:
     """An active job is paused and cancelled using acknowledged controls."""
-    entity = _entity(WorkMode.MODE_WORKING, _ack(2), _ack(4))
+    entity = _entity(WorkMode.MODE_WORKING)
 
-    await entity.async_cancel()
+    async def task_control(command: str, **kwargs: object) -> None:
+        if command == "pause_execute_task":
+            entity.coordinator.data.report_data.dev.sys_status = WorkMode.MODE_PAUSE
+        elif command == "cancel_job":
+            entity.coordinator.data.report_data.dev.sys_status = WorkMode.MODE_READY
+            entity.coordinator.data.report_data.work.bp_info = 0
 
-    assert entity.coordinator.async_send_and_wait.await_args_list == [
-        call("pause_execute_task", "todev_taskctrl_ack"),
-        call("cancel_job", "todev_taskctrl_ack"),
-    ]
-    entity.coordinator.async_request_report_snapshot.assert_awaited_once()
+    entity._async_task_control = AsyncMock(side_effect=task_control)
 
-
-@pytest.mark.asyncio
-async def test_cancel_continues_when_pause_ack_times_out() -> None:
-    """An applied pause with a lost ACK must not prevent cancellation."""
-    entity = _entity(WorkMode.MODE_WORKING, None, _ack(4))
-
-    await entity.async_cancel()
-
-    assert entity.coordinator.async_send_and_wait.await_args_list == [
-        call("pause_execute_task", "todev_taskctrl_ack"),
-        call("cancel_job", "todev_taskctrl_ack"),
-    ]
-    entity.coordinator.async_request_report_snapshot.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_cancel_rejects_missing_final_acknowledgement() -> None:
-    """A transport failure cannot make an unconfirmed cancellation succeed."""
-    entity = _entity(WorkMode.MODE_WORKING, None, None)
-
-    with pytest.raises(HomeAssistantError):
+    with patch.object(
+        MammotionLawnMowerEntity,
+        "control_state",
+        new_callable=PropertyMock,
+        return_value=SimpleNamespace(can_cancel=True),
+    ):
         await entity.async_cancel()
 
-    assert entity.coordinator.async_send_and_wait.await_args_list == [
-        call("pause_execute_task", "todev_taskctrl_ack"),
-        call("cancel_job", "todev_taskctrl_ack"),
+    assert entity._async_task_control.await_args_list == [
+        call(
+            "pause_execute_task",
+            action=2,
+            expected_modes={WorkMode.MODE_PAUSE},
+            translation_key="pause_failed",
+            timeout=20,
+        ),
+        call(
+            "cancel_job",
+            action=4,
+            expected_modes={WorkMode.MODE_READY},
+            translation_key="command_failed",
+            timeout=30,
+            success_predicate=entity._async_task_control.call_args.kwargs[
+                "success_predicate"
+            ],
+        ),
     ]
     entity.coordinator.async_request_report_snapshot.assert_awaited_once()
 
@@ -110,9 +122,54 @@ async def test_cancel_rejects_missing_final_acknowledgement() -> None:
 @pytest.mark.asyncio
 async def test_cancel_rejects_failed_acknowledgement() -> None:
     """A nonzero device result is surfaced instead of treated as success."""
-    entity = _entity(WorkMode.MODE_PAUSE, _ack(4, result=1))
+    entity = _entity(WorkMode.MODE_PAUSE)
+    entity.coordinator.async_start_report_stream = AsyncMock()
+    entity.coordinator.report_data_token = 1
+    entity.coordinator.async_send_and_wait = AsyncMock(
+        return_value=_ack(4, result=1)
+    )
 
     with pytest.raises(HomeAssistantError):
-        await entity.async_cancel()
+        await entity._async_task_control(
+            "cancel_job",
+            action=4,
+            expected_modes={WorkMode.MODE_READY},
+            translation_key="command_failed",
+            timeout=30,
+        )
 
-    entity.coordinator.async_request_report_snapshot.assert_awaited_once()
+    entity.coordinator.async_send_and_wait.assert_awaited_once_with(
+        "cancel_job",
+        "todev_taskctrl_ack",
+        preempt_reads=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_task_control_accepts_missing_ack_after_matching_report() -> None:
+    """A newer matching report confirms a command whose ACK was lost."""
+    entity = _entity(WorkMode.MODE_WORKING)
+    entity.coordinator.async_start_report_stream = AsyncMock()
+    entity.coordinator.report_data_token = 1
+    entity.coordinator.async_send_and_wait = AsyncMock(return_value=None)
+
+    async def report_pause(*, since: int, timeout: float) -> bool:
+        assert since == 1
+        assert timeout > 0
+        entity.coordinator.report_data_token = 2
+        entity.coordinator.data.report_data.dev.sys_status = WorkMode.MODE_PAUSE
+        return True
+
+    entity.coordinator.async_wait_for_report_data = AsyncMock(
+        side_effect=report_pause
+    )
+
+    await entity._async_task_control(
+        "pause_execute_task",
+        action=2,
+        expected_modes={WorkMode.MODE_PAUSE},
+        translation_key="pause_failed",
+        timeout=20,
+    )
+
+    entity.coordinator.async_wait_for_report_data.assert_awaited_once()
