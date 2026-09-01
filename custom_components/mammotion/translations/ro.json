@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Viteza de tundere"
       },
-      "progress": {
-        "name": "Progres"
-      },
-      "total_time": {
-        "name": "Durata totală"
-      },
-      "elapsed_time": {
-        "name": "Timpul scurs"
-      },
-      "left_time": {
-        "name": "Timpul rămas"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Necunoscut"
         }
       },
-      "activity_mode": {
-        "name": "Tipul de activitate",
-        "state": {
-          "MODE_NOT_ACTIVE": "Inactiv",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Dezactivat",
-          "MODE_INITIALIZATION": "Inițializare",
-          "MODE_READY": "Pregătit",
-          "MODE_WORKING": "Lucrează",
-          "MODE_RETURNING": "Se întoarce",
-          "MODE_CHARGING": "Încărcare",
-          "MODE_UPDATING": "Actualizare",
-          "MODE_LOCK": "Blocat",
-          "MODE_PAUSE": "În pauză",
-          "MODE_MANUAL_MOWING": "Cosit manual",
-          "MODE_UPDATE_SUCCESS": "Actualizare reușită",
-          "MODE_OTA_UPGRADE_FAIL": "Actualizare eșuată",
-          "MODE_JOB_DRAW": "Desenare sarcină",
-          "MODE_OBSTACLE_DRAW": "Desenare obstacole",
-          "MODE_CHANNEL_DRAW": "Desenare canal",
-          "MODE_ERASER_DRAW": "Desenare radieră",
-          "MODE_EDIT_BOUNDARY": "Editare limită",
-          "MODE_LOCATION_ERROR": "Eroare de localizare",
-          "MODE_BOUNDARY_JUMP": "Limită depășită",
-          "MODE_CHARGING_PAUSE": "Încărcare în pauză",
-          "MODE_POWER_OFF": "Oprire"
-        }
-      },
-      "work_area": {
-        "name": "Locație curentă"
-      },
       "map_sync_status": {
         "name": "Stare sincronizare hartă",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Raportat online",
           "reported_offline": "Raportat offline"
-        }
-      },
-      "task_area_status": {
-        "name": "Zona de sarcină {name}",
-        "state": {
-          "NOT_STARTED": "Neînceput",
-          "WAITING": "În așteptare",
-          "MOWING": "Cosire",
-          "COMPLETE": "Finalizat",
-          "ABORTED": "Abandonat"
         }
       },
       "maintenance_distance": {

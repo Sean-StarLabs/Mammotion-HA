@@ -34,6 +34,7 @@ from .const import DOMAIN, LOGGER
 from .control_state import MowerControlState
 from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
+from .mower_attributes import mower_task_attributes
 
 SERVICE_START_MOWING = "start_mow"
 SERVICE_CANCEL_JOB = "cancel_job"
@@ -364,6 +365,14 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                 else LawnMowerActivity.PAUSED
             )
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose task details on the primary mower entity."""
+        return mower_task_attributes(
+            self.coordinator.data,
+            self.coordinator.get_area_entity_name,
+        )
 
     async def _async_task_control(
         self,
