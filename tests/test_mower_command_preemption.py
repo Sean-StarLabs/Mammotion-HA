@@ -243,6 +243,27 @@ def test_pending_start_exposes_safety_features() -> None:
     assert features & lawn_mower.LawnMowerEntityFeature.DOCK
 
 
+def test_ready_mower_uses_reported_charger_position() -> None:
+    """A ready mower on the charger is docked even with stale charge state."""
+    entity = _new_entity()
+
+    with (
+        patch.object(
+            MammotionLawnMowerEntity,
+            "rpt_dev_status",
+            new_callable=PropertyMock,
+            return_value=SimpleNamespace(sys_status=WorkMode.MODE_READY),
+        ),
+        patch.object(
+            MammotionLawnMowerEntity,
+            "control_state",
+            new_callable=PropertyMock,
+            return_value=SimpleNamespace(on_charger=True),
+        ),
+    ):
+        assert entity.activity == lawn_mower.LawnMowerActivity.DOCKED
+
+
 @pytest.mark.asyncio
 async def test_dock_cancels_undispatched_start_without_pausing() -> None:
     """Docked planning is cancelled without sending task controls to the mower."""
