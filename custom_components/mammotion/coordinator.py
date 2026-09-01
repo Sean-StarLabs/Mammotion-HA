@@ -61,7 +61,11 @@ from pymammotion.http.model.camera_stream import (
 from pymammotion.http.model.http import ErrorInfo, Response
 from pymammotion.mammotion.commands.mammotion_command import MammotionCommand
 from pymammotion.proto import MulSex
-from pymammotion.state.device_state import DeviceShutdownEvent, DeviceSnapshot
+from pymammotion.state.device_state import (
+    DeviceConnectionState,
+    DeviceShutdownEvent,
+    DeviceSnapshot,
+)
 from pymammotion.transport.base import (
     BLEUnavailableError,
     CommandTimeoutError,
@@ -326,19 +330,25 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
                 await handle.stop_polling()
 
     def is_online(self) -> bool:
-        """Return True if the device currently has an active transport connection."""
+        """Return whether the latest device snapshot is connected."""
         device = self.manager.get_device_by_name(self.device_name)
         if device is None:
             return False
         handle = self.manager.mower(self.device_name)
         if handle is None:
             return bool(device.online)
-        if handle.has_transport(TransportType.BLE) and (
-            ble := handle.get_transport(TransportType.BLE)
-        ):
-            if ble.is_usable:
-                return True
-        return bool(not handle.availability.mqtt_reported_offline)
+        return handle.snapshot.connection_state is DeviceConnectionState.CONNECTED
+
+    @property
+    def command_ready(self) -> bool:
+        """Return whether a command can be sent through a usable transport."""
+        device = self.manager.get_device_by_name(self.device_name)
+        if device is None:
+            return False
+        handle = self.manager.mower(self.device_name)
+        if handle is None:
+            return bool(device.online)
+        return handle.has_usable_transport
 
     @property
     def mqtt_transport_connected(self) -> bool:
@@ -467,7 +477,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         device offline so callers can bail out of their update loops.
         """
         device = self.manager.get_device_by_name(self.device_name)
-        if device is None or not self.is_online():
+        if device is None or not self.command_ready:
             return
 
         try:
@@ -534,7 +544,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
     async def async_send_command(self, command: str, **kwargs: Any) -> bool | None:
         """Send command via MammotionClient command queue."""
         device = self.manager.get_device_by_name(self.device_name)
-        if device is None or not self.is_online():
+        if device is None or not self.command_ready:
             return False
 
         try:
@@ -588,7 +598,7 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
     ) -> bool | None:
         """Send a raw cloud command via the device's active transport."""
         device = self.manager.get_device_by_name(self.device_name)
-        if device is None or not self.is_online():
+        if device is None or not self.command_ready:
             return False
         handle = self.manager.mower(self.device_name)
         if handle is None:

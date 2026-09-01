@@ -266,7 +266,8 @@ async def async_setup_entry(
             MammotionUpdateSwitchEntity(coordinator, d) for d in UPDATE_SWITCH_ENTITIES
         )
         entities.extend(
-            MammotionSwitchEntity(coordinator, d) for d in CONNECTIVITY_SWITCH_ENTITIES
+            MammotionConnectivitySwitchEntity(coordinator, d)
+            for d in CONNECTIVITY_SWITCH_ENTITIES
         )
 
         if DeviceType.is_yuka(device_name) and not DeviceType.is_yuka_mini(device_name):
@@ -359,6 +360,15 @@ class MammotionSwitchEntity(MammotionBaseEntity, SwitchEntity, RestoreEntity):
         if not (last_state := await self.async_get_last_state()):
             return
         self._attr_is_on = last_state.state == STATE_ON
+
+
+class MammotionConnectivitySwitchEntity(MammotionSwitchEntity):
+    """Transport switch that remains usable while the mower is unavailable."""
+
+    @property
+    def available(self) -> bool:
+        """Keep transport recovery controls available independently of telemetry."""
+        return True
 
 
 class MammotionUpdateSwitchEntity(MammotionBaseEntity, SwitchEntity, RestoreEntity):
