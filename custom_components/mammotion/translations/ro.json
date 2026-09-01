@@ -75,6 +75,9 @@
       "error_1_code": {
         "name": "Codul ultimei erori"
       },
+      "latest_error": {
+        "name": "Ultima eroare"
+      },
       "battery_percent": {
         "name": "Acumulator"
       },

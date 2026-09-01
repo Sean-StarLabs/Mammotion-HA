@@ -75,6 +75,9 @@
       "error_1_code": {
         "name": "Koda zadnje napake"
       },
+      "latest_error": {
+        "name": "Zadnja napaka"
+      },
       "battery_percent": {
         "name": "Baterija"
       },

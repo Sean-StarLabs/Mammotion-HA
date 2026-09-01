@@ -75,6 +75,9 @@
       "error_1_code": {
         "name": "Last error code"
       },
+      "latest_error": {
+        "name": "Latest error"
+      },
       "battery_percent": {
         "name": "Battery"
       },

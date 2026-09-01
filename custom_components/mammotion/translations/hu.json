@@ -75,6 +75,9 @@
       "error_1_code": {
         "name": "Utolsó hibakód"
       },
+      "latest_error": {
+        "name": "Utolsó hiba"
+      },
       "battery_percent": {
         "name": "Akkumulátor"
       },
