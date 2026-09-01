@@ -56,6 +56,18 @@ def test_operation_settings_round_trip() -> None:
     assert helpers.deserialize_operation_settings(payload) == settings
 
 
+def test_cloned_settings_do_not_mutate_persisted_defaults() -> None:
+    """Transient route values remain isolated from the stored settings object."""
+    settings = OperationSettings(areas=[11, 22], speed=0.6, is_dump=True)
+
+    route_settings = helpers.clone_operation_settings(settings)
+    route_settings.areas.append(33)
+    route_settings.speed = 1.0
+    route_settings.is_dump = False
+
+    assert settings == OperationSettings(areas=[11, 22], speed=0.6, is_dump=True)
+
+
 def test_removed_area_is_pruned_from_persisted_selection() -> None:
     """An authoritative map cannot leave deleted hashes in a future route."""
     settings = OperationSettings(areas=[11, 22, 33])
@@ -63,6 +75,22 @@ def test_removed_area_is_pruned_from_persisted_selection() -> None:
     assert helpers.retain_known_areas(settings, {11, 33})
     assert settings.areas == [11, 33]
     assert not helpers.retain_known_areas(settings, {11, 33})
+
+
+def test_map_offsets_still_restore_after_route_settings() -> None:
+    """Non-route numbers keep RestoreNumber as their source of truth."""
+    assert helpers.should_restore_number_state(
+        route_setting=False,
+        operation_settings_restored=True,
+    )
+    assert not helpers.should_restore_number_state(
+        route_setting=True,
+        operation_settings_restored=True,
+    )
+    assert helpers.should_restore_number_state(
+        route_setting=True,
+        operation_settings_restored=False,
+    )
 
 
 def test_future_settings_schema_is_ignored() -> None:
