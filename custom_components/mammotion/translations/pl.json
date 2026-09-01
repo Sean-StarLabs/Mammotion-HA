@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Prędkość koszenia"
       },
-      "progress": {
-        "name": "Postęp"
-      },
-      "total_time": {
-        "name": "Całkowity czas"
-      },
-      "elapsed_time": {
-        "name": "Miniony czas"
-      },
-      "left_time": {
-        "name": "Pozostały czas"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Nieznany"
         }
       },
-      "activity_mode": {
-        "name": "Stan pracy",
-        "state": {
-          "MODE_NOT_ACTIVE": "Nieaktywny",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Wyłączony",
-          "MODE_INITIALIZATION": "Inicjalizacja",
-          "MODE_READY": "Gotowy",
-          "MODE_WORKING": "Pracuje",
-          "MODE_RETURNING": "Powraca",
-          "MODE_CHARGING": "Ładowanie",
-          "MODE_UPDATING": "Aktualizacja",
-          "MODE_LOCK": "Zablokowany",
-          "MODE_PAUSE": "Wstrzymany",
-          "MODE_MANUAL_MOWING": "Ręczne koszenie",
-          "MODE_UPDATE_SUCCESS": "Aktualizacja udana",
-          "MODE_OTA_UPGRADE_FAIL": "Aktualizacja nieudana",
-          "MODE_JOB_DRAW": "Rysowanie zadania",
-          "MODE_OBSTACLE_DRAW": "Rysowanie przeszkód",
-          "MODE_CHANNEL_DRAW": "Rysowanie kanału",
-          "MODE_ERASER_DRAW": "Rysowanie gumki",
-          "MODE_EDIT_BOUNDARY": "Edytowanie granicy",
-          "MODE_LOCATION_ERROR": "Błąd lokalizacji",
-          "MODE_BOUNDARY_JUMP": "Przekroczono granicę",
-          "MODE_CHARGING_PAUSE": "Ładowanie wstrzymane",
-          "MODE_POWER_OFF": "Wyłączanie"
-        }
-      },
-      "work_area": {
-        "name": "Aktualna lokalizacja"
-      },
       "map_sync_status": {
         "name": "Stan synchronizacji mapy",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Zgłoszono online",
           "reported_offline": "Zgłoszono offline"
-        }
-      },
-      "task_area_status": {
-        "name": "Obszar zadania {name}",
-        "state": {
-          "NOT_STARTED": "Nie rozpoczęto",
-          "WAITING": "Oczekiwanie",
-          "MOWING": "Koszenie",
-          "COMPLETE": "Ukończono",
-          "ABORTED": "Przerwano"
         }
       },
       "maintenance_distance": {

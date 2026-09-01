@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Klipphastighet"
       },
-      "progress": {
-        "name": "Förlopp"
-      },
-      "total_time": {
-        "name": "Total tid"
-      },
-      "elapsed_time": {
-        "name": "Förfluten tid"
-      },
-      "left_time": {
-        "name": "Tid kvar"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Okänd"
         }
       },
-      "activity_mode": {
-        "name": "Aktivitetsläge",
-        "state": {
-          "MODE_NOT_ACTIVE": "Inte aktiv",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Inaktiverad",
-          "MODE_INITIALIZATION": "Initialiserar",
-          "MODE_READY": "Redo",
-          "MODE_WORKING": "Arbetar",
-          "MODE_RETURNING": "Återvänder",
-          "MODE_CHARGING": "Laddar",
-          "MODE_UPDATING": "Uppdaterar",
-          "MODE_LOCK": "Låst",
-          "MODE_PAUSE": "Pausad",
-          "MODE_MANUAL_MOWING": "Manuell klippning",
-          "MODE_UPDATE_SUCCESS": "Uppdatering lyckades",
-          "MODE_OTA_UPGRADE_FAIL": "Uppdatering misslyckades",
-          "MODE_JOB_DRAW": "Ritar uppgift",
-          "MODE_OBSTACLE_DRAW": "Ritar hinder",
-          "MODE_CHANNEL_DRAW": "Ritar kanal",
-          "MODE_ERASER_DRAW": "Ritar suddgummi",
-          "MODE_EDIT_BOUNDARY": "Redigerar gräns",
-          "MODE_LOCATION_ERROR": "Positionsfel",
-          "MODE_BOUNDARY_JUMP": "Gräns korsad",
-          "MODE_CHARGING_PAUSE": "Laddning pausad",
-          "MODE_POWER_OFF": "Stänger av"
-        }
-      },
-      "work_area": {
-        "name": "Aktuell plats"
-      },
       "map_sync_status": {
         "name": "Kartsynkroniseringsstatus",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Rapporterad online",
           "reported_offline": "Rapporterad offline"
-        }
-      },
-      "task_area_status": {
-        "name": "Uppgiftsområde {name}",
-        "state": {
-          "NOT_STARTED": "Inte startat",
-          "WAITING": "Väntar",
-          "MOWING": "Klipper",
-          "COMPLETE": "Slutfört",
-          "ABORTED": "Avbrutet"
         }
       },
       "maintenance_distance": {

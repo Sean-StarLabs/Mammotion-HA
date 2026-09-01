@@ -68,6 +68,9 @@ This integration is not available in the default HACS store. You will need to ad
 
 See the wiki for how to [get started](https://github.com/mikey0000/Mammotion-HA/wiki/Getting-Started)
 
+See [Entity migration](docs/entity-migration.md) when updating dashboards or
+automations from releases that exposed task state as separate sensor entities.
+
 Once the integration is set up, you can control and monitor your Mammotion mower using Home Assistant. 🎉
 
 ## Map Position Offset
