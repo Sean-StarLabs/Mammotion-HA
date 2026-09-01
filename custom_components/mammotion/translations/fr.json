@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Vitesse de tonte"
       },
-      "progress": {
-        "name": "Progression"
-      },
-      "total_time": {
-        "name": "Temps total"
-      },
-      "elapsed_time": {
-        "name": "Temps écoulé"
-      },
-      "left_time": {
-        "name": "Temps restant"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Inconnu"
         }
       },
-      "activity_mode": {
-        "name": "Mode activité",
-        "state": {
-          "MODE_NOT_ACTIVE": "Inactif",
-          "MODE_ONLINE": "En ligne",
-          "MODE_OFFLINE": "Hors ligne",
-          "MODE_DISABLE": "Désactivé",
-          "MODE_INITIALIZATION": "Initialisation",
-          "MODE_READY": "Prêt",
-          "MODE_WORKING": "En marche",
-          "MODE_RETURNING": "Retour",
-          "MODE_CHARGING": "En charge",
-          "MODE_UPDATING": "Mise à jour",
-          "MODE_LOCK": "Verrouillé",
-          "MODE_PAUSE": "En pause",
-          "MODE_MANUAL_MOWING": "Tonte manuelle",
-          "MODE_UPDATE_SUCCESS": "Mise à jour réussie",
-          "MODE_OTA_UPGRADE_FAIL": "Mise à jour échouée",
-          "MODE_JOB_DRAW": "Dessin de tâche",
-          "MODE_OBSTACLE_DRAW": "Dessin d'obstacles",
-          "MODE_CHANNEL_DRAW": "Dessin de voie",
-          "MODE_ERASER_DRAW": "Dessin de gomme",
-          "MODE_EDIT_BOUNDARY": "Édition des limites",
-          "MODE_LOCATION_ERROR": "Erreur de localisation",
-          "MODE_BOUNDARY_JUMP": "Limite franchie",
-          "MODE_CHARGING_PAUSE": "Charge en pause",
-          "MODE_POWER_OFF": "Extinction en cours"
-        }
-      },
-      "work_area": {
-        "name": "Emplacement actuel"
-      },
       "map_sync_status": {
         "name": "État de synchronisation de la carte",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Signalé en ligne",
           "reported_offline": "Signalé hors ligne"
-        }
-      },
-      "task_area_status": {
-        "name": "Zone de tâche {name}",
-        "state": {
-          "NOT_STARTED": "Non démarré",
-          "WAITING": "En attente",
-          "MOWING": "En cours de tonte",
-          "COMPLETE": "Terminé",
-          "ABORTED": "Abandonné"
         }
       },
       "maintenance_distance": {

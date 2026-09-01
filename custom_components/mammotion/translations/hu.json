@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Nyírási sebesség"
       },
-      "progress": {
-        "name": "Folyamat"
-      },
-      "total_time": {
-        "name": "Teljes idő"
-      },
-      "elapsed_time": {
-        "name": "Eltelt idő"
-      },
-      "left_time": {
-        "name": "Hátralévő idő"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Ismeretlen"
         }
       },
-      "activity_mode": {
-        "name": "Működési mód",
-        "state": {
-          "MODE_NOT_ACTIVE": "Nem aktív",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Letiltva",
-          "MODE_INITIALIZATION": "Inicializálás",
-          "MODE_READY": "Kész",
-          "MODE_WORKING": "Dolgozik",
-          "MODE_RETURNING": "Visszatér",
-          "MODE_CHARGING": "Töltés",
-          "MODE_UPDATING": "Frissítés",
-          "MODE_LOCK": "Zárolva",
-          "MODE_PAUSE": "Szünet",
-          "MODE_MANUAL_MOWING": "Kézi nyírás",
-          "MODE_UPDATE_SUCCESS": "Frissítés sikeres",
-          "MODE_OTA_UPGRADE_FAIL": "Frissítés sikertelen",
-          "MODE_JOB_DRAW": "Rajzolási feladat",
-          "MODE_OBSTACLE_DRAW": "Akadályok rajzolása",
-          "MODE_CHANNEL_DRAW": "Útvonal rajzolása",
-          "MODE_ERASER_DRAW": "Törlőterület rajzolása",
-          "MODE_EDIT_BOUNDARY": "Határ szerkesztése",
-          "MODE_LOCATION_ERROR": "Helymeghatározási hiba",
-          "MODE_BOUNDARY_JUMP": "Határ átlépve",
-          "MODE_CHARGING_PAUSE": "Töltés szünetel",
-          "MODE_POWER_OFF": "Kikapcsolás"
-        }
-      },
-      "work_area": {
-        "name": "Jelenlegi hely"
-      },
       "map_sync_status": {
         "name": "Térkép szinkronizálási állapota",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Online jelentve",
           "reported_offline": "Offline jelentve"
-        }
-      },
-      "task_area_status": {
-        "name": "Feladatterület {name}",
-        "state": {
-          "NOT_STARTED": "Nem indult",
-          "WAITING": "Várakozik",
-          "MOWING": "Nyírás",
-          "COMPLETE": "Kész",
-          "ABORTED": "Megszakítva"
         }
       },
       "maintenance_distance": {

@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Rychlost sečení"
       },
-      "progress": {
-        "name": "Postup"
-      },
-      "total_time": {
-        "name": "Celkový čas"
-      },
-      "elapsed_time": {
-        "name": "Uplynulý čas"
-      },
-      "left_time": {
-        "name": "Zbývající čas"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Neznámý"
         }
       },
-      "activity_mode": {
-        "name": "Režim činnosti",
-        "state": {
-          "MODE_NOT_ACTIVE": "Neaktivní",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Zakázáno",
-          "MODE_INITIALIZATION": "Inicializace",
-          "MODE_READY": "Připraveno",
-          "MODE_WORKING": "Pracuje",
-          "MODE_RETURNING": "Návrat",
-          "MODE_CHARGING": "Nabíjení",
-          "MODE_UPDATING": "Aktualizace",
-          "MODE_LOCK": "Zamčeno",
-          "MODE_PAUSE": "Pozastaveno",
-          "MODE_MANUAL_MOWING": "Ruční sekání",
-          "MODE_UPDATE_SUCCESS": "Aktualizace úspěšná",
-          "MODE_OTA_UPGRADE_FAIL": "Aktualizace selhala",
-          "MODE_JOB_DRAW": "Kreslení úlohy",
-          "MODE_OBSTACLE_DRAW": "Kreslení překážek",
-          "MODE_CHANNEL_DRAW": "Kreslení kanálu",
-          "MODE_ERASER_DRAW": "Kreslení mazání",
-          "MODE_EDIT_BOUNDARY": "Úprava hranice",
-          "MODE_LOCATION_ERROR": "Chyba polohy",
-          "MODE_BOUNDARY_JUMP": "Překročení hranice",
-          "MODE_CHARGING_PAUSE": "Nabíjení pozastaveno",
-          "MODE_POWER_OFF": "Vypínání"
-        }
-      },
-      "work_area": {
-        "name": "Aktuální poloha"
-      },
       "map_sync_status": {
         "name": "Stav synchronizace mapy",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Hlášeno online",
           "reported_offline": "Hlášeno offline"
-        }
-      },
-      "task_area_status": {
-        "name": "Stav oblasti úkolu {name}",
-        "state": {
-          "NOT_STARTED": "Nezahájeno",
-          "WAITING": "Čeká se",
-          "MOWING": "Sečení",
-          "COMPLETE": "Dokončeno",
-          "ABORTED": "Přerušeno"
         }
       },
       "maintenance_distance": {
