@@ -60,6 +60,7 @@ from .entity import (
     MammotionBaseRTKEntity,
     MammotionBaseSpinoEntity,
 )
+from .errors import error_sensor_registry_migration, get_mammotion_error_details
 
 
 class MowerDataFormatter:
@@ -133,13 +134,6 @@ class MammotionWorkSensorEntityDescription(SensorEntityDescription):
     """Describes Mammotion sensor entity."""
 
     value_fn: Callable[[MammotionReportUpdateCoordinator, MowingDevice], StateType]
-
-
-@dataclass(frozen=True, kw_only=True)
-class MammotionErrorSensorEntityDescription(SensorEntityDescription):
-    """Describes Mammotion sensor entity."""
-
-    value_fn: Callable[[MammotionDeviceErrorUpdateCoordinator, MowingDevice], StateType]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -419,33 +413,6 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
     # 'real_pos_x': -142511, 'real_pos_y': -20548, 'real_toward': 50915, (robot position)
 )
 
-SENSOR_ERROR_TYPES: tuple[MammotionErrorSensorEntityDescription, ...] = (
-    MammotionErrorSensorEntityDescription(
-        key="error_1_time",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        value_fn=lambda coordinator, mower_data: coordinator.get_error_time(1),
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    MammotionErrorSensorEntityDescription(
-        key="error_1_message",
-        state_class=None,
-        native_unit_of_measurement=None,
-        device_class=None,
-        value_fn=lambda coordinator, mower_data: (
-            msg[:255] if (msg := coordinator.get_error_message(1)) is not None else None
-        ),
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    MammotionErrorSensorEntityDescription(
-        key="error_1_code",
-        state_class=None,
-        native_unit_of_measurement=None,
-        device_class=None,
-        value_fn=lambda coordinator, mower_data: coordinator.get_error_code(1),
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-)
-
 # Luba 2 / Yuka (non-RTK) only — APK refreshNonRtkDeviceUI shows these;
 # Luba 1 and standard RTK devices do not display them.
 LUBA_2_YUKA_SIGNAL_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
@@ -675,6 +642,35 @@ SPINO_ERROR_SENSOR_TYPES: tuple[MammotionSpinoErrorSensorEntityDescription, ...]
 )
 
 
+def _migrate_retired_error_sensors(
+    hass: HomeAssistant,
+    config_entry_id: str,
+    unique_name: str,
+) -> None:
+    """Preserve the code entity ID and remove superseded error fields."""
+    registry = er.async_get(hass)
+    entries = [
+        registry_entry
+        for registry_entry in er.async_entries_for_config_entry(
+            registry, config_entry_id
+        )
+        if registry_entry.domain == SENSOR_DOMAIN
+        and registry_entry.platform == DOMAIN
+    ]
+    entries_by_unique_id = {entry.unique_id: entry for entry in entries}
+    migration_source, retired_unique_ids = error_sensor_registry_migration(
+        unique_name,
+        set(entries_by_unique_id),
+    )
+    if migration_source is not None:
+        registry.async_update_entity(
+            entries_by_unique_id[migration_source].entity_id,
+            new_unique_id=f"{unique_name}_latest_error",
+        )
+    for retired_unique_id in retired_unique_ids:
+        registry.async_remove(entries_by_unique_id[retired_unique_id].entity_id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: MammotionConfigEntry,
@@ -685,6 +681,11 @@ async def async_setup_entry(
 
     entities = []
     for mower in mammotion_mowers:
+        _migrate_retired_error_sensors(
+            hass,
+            entry.entry_id,
+            mower.reporting_coordinator.unique_name,
+        )
         if not DeviceType.is_yuka(mower.device.device_name):
             entities.extend(
                 MammotionSensorEntity(mower.reporting_coordinator, description)
@@ -724,10 +725,7 @@ async def async_setup_entry(
             for description in WORK_SENSOR_TYPES
         )
 
-        entities.extend(
-            MammotionErrorSensorEntity(mower.error_coordinator, description)
-            for description in SENSOR_ERROR_TYPES
-        )
+        entities.append(MammotionErrorSensorEntity(mower.error_coordinator))
 
         # Dynamic task-area sensors — one per zone in the active mow task.
         # Added/removed as work_tasks_event.ids changes.
@@ -853,25 +851,42 @@ class MammotionSpinoErrorSensorEntity(MammotionBaseSpinoEntity, SensorEntity):
 
 
 class MammotionErrorSensorEntity(MammotionBaseEntity, SensorEntity):
-    """Defining the Mammotion Error Sensor."""
+    """Expose the latest mower error as one diagnostic entity."""
 
-    entity_description: MammotionErrorSensorEntityDescription
     _attr_has_entity_name = True
+    _attr_translation_key = "latest_error"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
         coordinator: MammotionDeviceErrorUpdateCoordinator,
-        entity_description: MammotionErrorSensorEntityDescription,
     ) -> None:
-        """Set up MammotionSensor."""
-        super().__init__(coordinator, entity_description.key)
-        self.entity_description = entity_description
-        self._attr_translation_key = entity_description.key
+        """Set up the latest error sensor."""
+        super().__init__(coordinator, "latest_error")
 
     @property
     def native_value(self) -> StateType:
-        """Return the state of the sensor."""
-        return self.entity_description.value_fn(self.coordinator, self.coordinator.data)
+        """Return the latest error code."""
+        details = get_mammotion_error_details(
+            self.coordinator.data,
+            self.coordinator.hass.config.language,
+        )
+        return details.code if details is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        """Return details for the latest historical error."""
+        details = get_mammotion_error_details(
+            self.coordinator.data,
+            self.coordinator.hass.config.language,
+        )
+        if details is None:
+            return None
+        return {
+            "occurred_at": details.occurred_at,
+            "message": details.message,
+            "level": details.level,
+        }
 
 
 class MammotionWorkSensorEntity(MammotionBaseEntity, SensorEntity):
