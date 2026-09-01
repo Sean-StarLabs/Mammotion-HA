@@ -31,6 +31,7 @@ from pymammotion.utility.device_type import DeviceType
 from . import MammotionConfigEntry, MammotionReportUpdateCoordinator
 from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
+from .operation_settings import option_for_value
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -40,6 +41,7 @@ class MammotionConfigSelectEntityDescription(SelectEntityDescription):
     key: str
     options: list[str]
     set_fn: Callable[[MammotionBaseUpdateCoordinator, str], None]
+    get_fn: Callable[[MammotionBaseUpdateCoordinator], str | None] | None = None
     async_set_fn: Callable[[MammotionBaseUpdateCoordinator], Awaitable[None]] = None
 
 
@@ -169,12 +171,22 @@ SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "channel_mode", CuttingMode[value].value
         ),
+        get_fn=lambda coordinator: option_for_value(
+            [mode.name for mode in CuttingMode],
+            {mode.name: mode.value for mode in CuttingMode},
+            coordinator.operation_settings.channel_mode,
+        ),
     ),
     MammotionConfigSelectEntityDescription(
         key="mowing_laps",
         options=[mode.name for mode in BorderPatrolMode],
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "mowing_laps", BorderPatrolMode[value].value
+        ),
+        get_fn=lambda coordinator: option_for_value(
+            [mode.name for mode in BorderPatrolMode],
+            {mode.name: mode.value for mode in BorderPatrolMode},
+            coordinator.operation_settings.mowing_laps,
         ),
     ),
     MammotionConfigSelectEntityDescription(
@@ -185,12 +197,22 @@ SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
             "obstacle_laps",
             ObstacleLapsMode[value].value,
         ),
+        get_fn=lambda coordinator: option_for_value(
+            [mode.name for mode in ObstacleLapsMode],
+            {mode.name: mode.value for mode in ObstacleLapsMode},
+            coordinator.operation_settings.obstacle_laps,
+        ),
     ),
     MammotionConfigSelectEntityDescription(
         key="border_mode",
         options=[order.name for order in MowOrder],
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "border_mode", MowOrder[value].value
+        ),
+        get_fn=lambda coordinator: option_for_value(
+            [order.name for order in MowOrder],
+            {order.name: order.value for order in MowOrder},
+            coordinator.operation_settings.border_mode,
         ),
     ),
 )
@@ -206,6 +228,15 @@ LUBA1_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward_mode", PathAngleSetting[value].value
         ),
+        get_fn=lambda coordinator: option_for_value(
+            [
+                angle_type.name
+                for angle_type in PathAngleSetting
+                if angle_type != PathAngleSetting.random_angle
+            ],
+            {angle_type.name: angle_type.value for angle_type in PathAngleSetting},
+            coordinator.operation_settings.toward_mode,
+        ),
     ),
 )
 
@@ -215,6 +246,11 @@ LUBA_PRO_SELECT_ENTITIES: tuple[MammotionConfigSelectEntityDescription, ...] = (
         options=[angle_type.name for angle_type in PathAngleSetting],
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward_mode", PathAngleSetting[value].value
+        ),
+        get_fn=lambda coordinator: option_for_value(
+            [angle_type.name for angle_type in PathAngleSetting],
+            {angle_type.name: angle_type.value for angle_type in PathAngleSetting},
+            coordinator.operation_settings.toward_mode,
         ),
     ),
 )
@@ -267,19 +303,24 @@ async def async_setup_entry(
                 )
             )
 
+        bypass_modes = tuple(
+            DetectionStrategy.for_device(
+                mower.device.device_name,
+                _device_firmware_version(mower.reporting_coordinator.data),
+            )
+        )
         bypass_mode_desc = MammotionConfigSelectEntityDescription(
             key="bypass_mode",
-            options=[
-                s.name
-                for s in DetectionStrategy.for_device(
-                    mower.device.device_name,
-                    _device_firmware_version(mower.reporting_coordinator.data),
-                )
-            ],
+            options=[mode.name for mode in bypass_modes],
             set_fn=lambda coordinator, value: setattr(
                 coordinator.operation_settings,
                 "ultra_wave",
                 DetectionStrategy[value].value,
+            ),
+            get_fn=lambda coordinator, modes=bypass_modes: option_for_value(
+                [mode.name for mode in modes],
+                {mode.name: mode.value for mode in modes},
+                coordinator.operation_settings.ultra_wave,
             ),
             async_set_fn=lambda coordinator: coordinator.async_modify_plan_if_mowing(),
         )
@@ -339,8 +380,30 @@ class MammotionConfigSelectEntity(MammotionBaseEntity, SelectEntity, RestoreEnti
         self.entity_description = entity_description
         self._attr_translation_key = entity_description.key
         self._attr_options = entity_description.options
-        self._attr_current_option = entity_description.options[0]
-        self.entity_description.set_fn(self.coordinator, self._attr_current_option)
+        self._attr_current_option = self._resolve_option()
+        if (
+            self.entity_description.get_fn is None
+            and not self.coordinator.operation_settings_restored
+        ):
+            self.entity_description.set_fn(self.coordinator, self._attr_current_option)
+
+    def _resolve_option(self) -> str:
+        """Return the option represented by current operation settings."""
+        if self.entity_description.get_fn is not None:
+            option = self.entity_description.get_fn(self.coordinator)
+            if option in self._attr_options:
+                return option
+            option = self.entity_description.options[0]
+            self.entity_description.set_fn(self.coordinator, option)
+            self.coordinator.async_save_operation_settings()
+            return option
+        return self.entity_description.options[0]
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the selected option from operation settings."""
+        self._attr_current_option = self._resolve_option()
+        super()._handle_coordinator_update()
 
     async def async_select_option(self, option: str) -> None:
         """Select an option."""
@@ -348,17 +411,21 @@ class MammotionConfigSelectEntity(MammotionBaseEntity, SelectEntity, RestoreEnti
         self.entity_description.set_fn(self.coordinator, option)
         if self.entity_description.async_set_fn is not None:
             await self.entity_description.async_set_fn(self.coordinator)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
         await super().async_added_to_hass()
+        if self.coordinator.operation_settings_restored:
+            return
         if (state := await self.async_get_last_state()) is not None:
             if state.state in self.entity_description.options:
                 self._attr_current_option = state.state
                 self.entity_description.set_fn(
                     self.coordinator, self._attr_current_option
                 )
+                self.coordinator.async_save_operation_settings()
 
 
 # Define the select entity class with entity_category: config
