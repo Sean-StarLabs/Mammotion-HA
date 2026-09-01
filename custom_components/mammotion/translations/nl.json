@@ -66,14 +66,8 @@
   },
   "entity": {
     "sensor": {
-      "error_1_message": {
+      "latest_error": {
         "name": "Laatste fout"
-      },
-      "error_1_time": {
-        "name": "Laatste fout tijd"
-      },
-      "error_1_code": {
-        "name": "Laatste foutcode"
       },
       "battery_percent": {
         "name": "Batterij"
