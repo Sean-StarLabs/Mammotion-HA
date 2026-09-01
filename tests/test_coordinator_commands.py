@@ -44,6 +44,18 @@ class _TestCoordinator(MammotionBaseUpdateCoordinator):
         return device
 
 
+def test_area_selection_refreshes_dependent_entities() -> None:
+    """Area changes immediately refresh the mower's supported controls."""
+    coordinator = object.__new__(_TestCoordinator)
+    coordinator.async_save_operation_settings = MagicMock()
+    coordinator.async_update_listeners = MagicMock()
+
+    coordinator.async_area_selection_changed()
+
+    coordinator.async_save_operation_settings.assert_called_once_with()
+    coordinator.async_update_listeners.assert_called_once_with()
+
+
 @pytest.mark.asyncio
 async def test_send_and_wait_returns_protocol_response() -> None:
     """Callers receive the response needed to validate an acknowledgement."""
