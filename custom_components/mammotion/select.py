@@ -29,6 +29,7 @@ from pymammotion.data.model.pool_state import (
 from pymammotion.utility.device_type import DeviceType
 
 from . import MammotionConfigEntry, MammotionReportUpdateCoordinator
+from .control_state import route_setting_available
 from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
 from .operation_settings import option_for_value
@@ -407,12 +408,27 @@ class MammotionConfigSelectEntity(MammotionBaseEntity, SelectEntity, RestoreEnti
 
     async def async_select_option(self, option: str) -> None:
         """Select an option."""
+        previous_option = self._attr_current_option
         self._attr_current_option = option
         self.entity_description.set_fn(self.coordinator, option)
-        if self.entity_description.async_set_fn is not None:
-            await self.entity_description.async_set_fn(self.coordinator)
+        try:
+            if self.entity_description.async_set_fn is not None:
+                await self.entity_description.async_set_fn(self.coordinator)
+        except Exception:
+            self._attr_current_option = previous_option
+            if previous_option is not None:
+                self.entity_description.set_fn(self.coordinator, previous_option)
+            raise
         self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Return whether this route setting can currently be changed."""
+        return super().available and route_setting_available(
+            self.coordinator.data.report_data.dev.sys_status,
+            runtime_supported=self.entity_description.async_set_fn is not None,
+        )
 
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
