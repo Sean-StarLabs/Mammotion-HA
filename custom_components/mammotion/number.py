@@ -29,6 +29,7 @@ from pymammotion.utility.device_type import DeviceType
 from . import MammotionConfigEntry
 from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
+from .operation_settings import should_restore_number_state
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -40,6 +41,7 @@ class MammotionConfigNumberEntityDescription(NumberEntityDescription):  # type: 
         Callable[[MammotionBaseUpdateCoordinator[Any], float], Awaitable[None]] | None
     ) = None
     get_fn: Callable[[MammotionBaseUpdateCoordinator[Any]], float | None] | None = None
+    route_setting: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -109,6 +111,7 @@ AUDIO_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
 NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
     MammotionConfigNumberEntityDescription(
         key="start_progress",
+        route_setting=True,
         native_min_value=0,
         native_max_value=100,
         native_step=1,
@@ -117,9 +120,11 @@ NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "start_progress", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.start_progress,
     ),
     MammotionConfigNumberEntityDescription(
         key="cutting_angle",
+        route_setting=True,
         native_step=1,
         native_unit_of_measurement=DEGREE,
         native_min_value=-180,
@@ -127,9 +132,11 @@ NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.toward,
     ),
     MammotionConfigNumberEntityDescription(
         key="toward_included_angle",
+        route_setting=True,
         native_step=1,
         native_unit_of_measurement=DEGREE,
         native_min_value=-180,
@@ -137,12 +144,14 @@ NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "toward_included_angle", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.toward_included_angle,
     ),
 )
 
 YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
     MammotionConfigNumberEntityDescription(
         key="dumping_interval",
+        route_setting=True,
         native_min_value=5,
         native_max_value=100,
         native_step=1,
@@ -151,12 +160,14 @@ YUKA_NUMBER_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "collect_grass_frequency", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.collect_grass_frequency,
     ),
 )
 
 LUBA_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
     MammotionConfigNumberEntityDescription(
         key="blade_height",
+        route_setting=True,
         device_class=NumberDeviceClass.DISTANCE,
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
         native_step=1,
@@ -176,6 +187,7 @@ LUBA_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
 NUMBER_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
     MammotionConfigNumberEntityDescription(
         key="working_speed",
+        route_setting=True,
         device_class=NumberDeviceClass.SPEED,
         native_unit_of_measurement=UnitOfSpeed.METERS_PER_SECOND,
         native_step=0.1,
@@ -186,9 +198,11 @@ NUMBER_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "speed", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.speed,
     ),
     MammotionConfigNumberEntityDescription(
         key="path_spacing",
+        route_setting=True,
         native_step=1,
         device_class=NumberDeviceClass.DISTANCE,
         native_unit_of_measurement=UnitOfLength.CENTIMETERS,
@@ -197,6 +211,7 @@ NUMBER_WORKING_ENTITIES: tuple[MammotionConfigNumberEntityDescription, ...] = (
         set_fn=lambda coordinator, value: setattr(
             coordinator.operation_settings, "channel_width", value
         ),
+        get_fn=lambda coordinator: coordinator.operation_settings.channel_width,
     ),
 )
 
@@ -304,6 +319,7 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
         elif (
             self.entity_description.set_fn is not None
             and self._attr_native_value is not None
+            and not self.coordinator.operation_settings_restored
         ):
             self.entity_description.set_fn(self.coordinator, self._attr_native_value)
 
@@ -321,11 +337,18 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
             self.entity_description.set_fn(self.coordinator, value)
         if self.entity_description.set_async_fn is not None:
             await self.entity_description.set_async_fn(self.coordinator, value)
+        if self.entity_description.route_setting:
+            self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Restore last saved value when entity is added to hass."""
         await super().async_added_to_hass()
+        if not should_restore_number_state(
+            route_setting=self.entity_description.route_setting,
+            operation_settings_restored=self.coordinator.operation_settings_restored,
+        ):
+            return
         last_number_data = await self.async_get_last_number_data()
         if (last_number_data is not None) and (
             last_number_data.native_value is not None
@@ -335,6 +358,8 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
                 self.entity_description.set_fn(
                     self.coordinator, cast(float, self._attr_native_value)
                 )
+                if self.entity_description.route_setting:
+                    self.coordinator.async_save_operation_settings()
 
 
 class MammotionWorkingNumberEntity(MammotionConfigNumberEntity):
@@ -386,6 +411,7 @@ class MammotionWorkingNumberEntity(MammotionConfigNumberEntity):
             self.entity_description.set_fn(self.coordinator, value)
         if self.entity_description.set_async_fn is not None:
             await self.entity_description.set_async_fn(self.coordinator, value)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
 

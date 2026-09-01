@@ -15,6 +15,7 @@ from .const import DOMAIN
 SAVE_DELAY = 300
 
 STORE_DATA_KEY = f"{DOMAIN}_store"
+OPERATION_SETTINGS_KEY = "__operation_settings__"
 
 LEGACY_STORAGE_VERSION = 1
 LEGACY_STORAGE_MINOR_VERSION = 2
@@ -47,12 +48,38 @@ class MammotionConfigStore(Store):  # type: ignore[misc]
         self.async_update_device_data(device_name, legacy_data)
         return legacy_data
 
+    def operation_settings(self, device_name: str) -> dict[str, Any] | None:
+        """Return the versioned operation-settings payload for a mower."""
+        settings = self.device_data.get(OPERATION_SETTINGS_KEY, {})
+        if not isinstance(settings, dict):
+            return None
+        payload = settings.get(device_name)
+        return payload if isinstance(payload, dict) else None
+
+    @callback
+    def async_update_operation_settings(
+        self, device_name: str, payload: dict[str, Any]
+    ) -> None:
+        """Update a mower's operation settings in the shared delayed store."""
+        settings = self.device_data.setdefault(OPERATION_SETTINGS_KEY, {})
+        if not isinstance(settings, dict):
+            settings = {}
+            self.device_data[OPERATION_SETTINGS_KEY] = settings
+        if settings.get(device_name) == payload:
+            return
+        settings[device_name] = payload
+        self._schedule_save()
+
     @callback
     def async_update_device_data(self, device_name: str, data: dict[str, Any]) -> None:
         """Update a device in memory, writing to disk at most once per SAVE_DELAY."""
         if self.device_data.get(device_name) == data:
             return
         self.device_data[device_name] = data
+        self._schedule_save()
+
+    def _schedule_save(self) -> None:
+        """Schedule one delayed write without extending an existing deadline."""
         # A pending write keeps its own deadline: async_delay_save would push the
         # write back on every call and never fire while polling continues.
         if self._save_pending:
@@ -73,7 +100,11 @@ class MammotionConfigStore(Store):  # type: ignore[misc]
 
     async def async_remove_device(self, device_name: str) -> None:
         """Drop the stored state of a single device."""
-        if self.device_data.pop(device_name, None) is None:
+        removed = self.device_data.pop(device_name, None) is not None
+        settings = self.device_data.get(OPERATION_SETTINGS_KEY)
+        if isinstance(settings, dict):
+            removed = settings.pop(device_name, None) is not None or removed
+        if not removed:
             return
         self._save_pending = True
         await self.async_flush()

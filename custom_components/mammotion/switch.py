@@ -354,6 +354,8 @@ class MammotionSwitchEntity(MammotionBaseEntity, SwitchEntity, RestoreEntity):
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
+        if self.coordinator.operation_settings_restored:
+            return
         if not (last_state := await self.async_get_last_state()):
             return
         self._attr_is_on = last_state.state == STATE_ON
@@ -436,17 +438,21 @@ class MammotionConfigSwitchEntity(MammotionBaseEntity, SwitchEntity, RestoreEnti
         """Turn the entity on."""
         self._attr_is_on = True
         self.entity_description.set_fn(self.coordinator, True)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the entity off."""
         self._attr_is_on = False
         self.entity_description.set_fn(self.coordinator, False)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
+        if self.coordinator.operation_settings_restored:
+            return
         if not (last_state := await self.async_get_last_state()):
             return
         self._attr_is_on = last_state.state == STATE_ON
@@ -526,12 +532,14 @@ class MammotionConfigAreaSwitchEntity(MammotionBaseEntity, SwitchEntity, Restore
         """Turn the entity on."""
         self._attr_is_on = True
         self.entity_description.set_fn(self.coordinator, True, self.area)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the entity off."""
         self._attr_is_on = False
         self.entity_description.set_fn(self.coordinator, False, self.area)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
@@ -539,6 +547,8 @@ class MammotionConfigAreaSwitchEntity(MammotionBaseEntity, SwitchEntity, Restore
         await super().async_added_to_hass()
         # Seed with any existing name override so we only push live user edits.
         self._pushed_name = self.registry_entry.name if self.registry_entry else None
+        if self.coordinator.operation_settings_restored:
+            return
         last_state = await self.async_get_last_state()
         if last_state and last_state.state == STATE_ON:
             await self.async_turn_on()
