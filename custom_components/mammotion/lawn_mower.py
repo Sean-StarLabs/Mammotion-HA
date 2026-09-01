@@ -34,6 +34,7 @@ from .const import DOMAIN, LOGGER
 from .control_state import MowerControlState
 from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
+from .mower_attributes import mower_task_attributes
 
 SERVICE_START_MOWING = "start_mow"
 SERVICE_CANCEL_JOB = "cancel_job"
@@ -216,6 +217,7 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         self._start_dispatching = False
         self._start_dispatched = False
         self._start_outcome_uncertain = False
+        self._start_outcome_report_token = 0
 
     def _preempt_pending_start(self) -> _StartPreemption:
         """Wake pending start operations before acquiring the command lock."""
@@ -349,7 +351,12 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
     @callback
     def _handle_coordinator_update(self) -> None:
         """Clear uncertain command state once fresh device telemetry is applied."""
-        self._start_outcome_uncertain = False
+        if (
+            self._start_outcome_uncertain
+            and self.coordinator.report_data_token
+            != self._start_outcome_report_token
+        ):
+            self._start_outcome_uncertain = False
         super()._handle_coordinator_update()
 
     @property
@@ -376,6 +383,14 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                 else LawnMowerActivity.PAUSED
             )
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose task details on the primary mower entity."""
+        return mower_task_attributes(
+            self.coordinator.data,
+            self.coordinator.get_area_entity_name,
+        )
 
     async def _async_task_control(
         self,
@@ -499,6 +514,9 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             if self._active_start_cancel is cancel_event:
                 if not completed and self._start_dispatched:
                     self._start_outcome_uncertain = True
+                    self._start_outcome_report_token = (
+                        self.coordinator.report_data_token
+                    )
                 self._active_start_cancel = None
                 self._start_dispatching = False
                 self._start_dispatched = False
@@ -637,7 +655,8 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         """Start return-to-dock when the reported state permits it."""
         preemption = self._preempt_pending_start()
         async with self._command_lock:
-            await self._async_require_fresh_state()
+            if not preemption.may_be_active:
+                await self._async_require_fresh_state()
             state = self.control_state
             if not (state.can_dock or preemption.pending):
                 raise HomeAssistantError(
@@ -685,7 +704,8 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         """Pause active work or cancel a return to dock."""
         preemption = self._preempt_pending_start()
         async with self._command_lock:
-            await self._async_require_fresh_state()
+            if not preemption.may_be_active:
+                await self._async_require_fresh_state()
             if not (self.control_state.can_pause or preemption.pending):
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,
@@ -723,7 +743,8 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
         """Cancel the active task or retained breakpoint."""
         preemption = self._preempt_pending_start()
         async with self._command_lock:
-            await self._async_require_fresh_state()
+            if not preemption.may_be_active:
+                await self._async_require_fresh_state()
             await self._async_cancel_locked(
                 refresh_state=False,
                 start_pending=preemption.pending,

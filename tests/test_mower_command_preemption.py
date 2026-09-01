@@ -50,7 +50,10 @@ def _new_entity() -> MammotionLawnMowerEntity:
     entity._start_dispatching = False
     entity._start_dispatched = False
     entity._start_outcome_uncertain = False
-    entity.coordinator = SimpleNamespace(async_request_report_snapshot=AsyncMock())
+    entity._start_outcome_report_token = 0
+    entity.coordinator = SimpleNamespace(
+        async_request_report_snapshot=AsyncMock(), report_data_token=0
+    )
     return entity
 
 
@@ -277,6 +280,64 @@ def test_pending_start_exposes_safety_features() -> None:
 
     assert features & lawn_mower.LawnMowerEntityFeature.PAUSE
     assert features & lawn_mower.LawnMowerEntityFeature.DOCK
+
+
+def test_unrelated_update_keeps_uncertain_start_controls() -> None:
+    """Coordinator churn cannot clear uncertainty without fresh report data."""
+    entity = _new_entity()
+    entity._start_outcome_uncertain = True
+    entity._start_outcome_report_token = 7
+    entity.coordinator.report_data_token = 7
+
+    with patch.object(
+        lawn_mower.MammotionBaseEntity,
+        "_handle_coordinator_update",
+        create=True,
+    ):
+        entity._handle_coordinator_update()
+
+    assert entity._start_outcome_uncertain
+
+    entity.coordinator.report_data_token = 8
+    with patch.object(
+        lawn_mower.MammotionBaseEntity,
+        "_handle_coordinator_update",
+        create=True,
+    ):
+        entity._handle_coordinator_update()
+
+    assert not entity._start_outcome_uncertain
+
+
+@pytest.mark.asyncio
+async def test_uncertain_start_pause_preempts_without_freshness_read() -> None:
+    """A safety command bypasses reads after a start may have reached the mower."""
+    entity = _new_entity()
+    entity._start_outcome_uncertain = True
+    entity.coordinator.data = SimpleNamespace(
+        report_data=SimpleNamespace(
+            dev=SimpleNamespace(sys_status=WorkMode.MODE_WORKING)
+        )
+    )
+    entity.coordinator.async_ensure_fresh_report_data = AsyncMock(return_value=False)
+    entity._async_task_control = AsyncMock()
+
+    with patch.object(
+        MammotionLawnMowerEntity,
+        "control_state",
+        new_callable=PropertyMock,
+        return_value=SimpleNamespace(can_pause=False),
+    ):
+        await entity.async_pause()
+
+    entity.coordinator.async_ensure_fresh_report_data.assert_not_awaited()
+    entity._async_task_control.assert_awaited_once_with(
+        "pause_execute_task",
+        action=2,
+        expected_modes={WorkMode.MODE_PAUSE, WorkMode.MODE_CHARGING_PAUSE},
+        translation_key="pause_failed",
+        timeout=lawn_mower.START_PREEMPT_CONFIRM_TIMEOUT,
+    )
 
 
 @pytest.mark.asyncio

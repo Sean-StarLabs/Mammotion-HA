@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Maai snelheid"
       },
-      "progress": {
-        "name": "Voortgang"
-      },
-      "total_time": {
-        "name": "Totale tijd"
-      },
-      "elapsed_time": {
-        "name": "Verstreken tijd"
-      },
-      "left_time": {
-        "name": "Tijd nog te gaan"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Onbekend"
         }
       },
-      "activity_mode": {
-        "name": "Activiteitsmodus",
-        "state": {
-          "MODE_NOT_ACTIVE": "Niet actief",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Gedeactiveerd",
-          "MODE_INITIALIZATION": "Initialiseren",
-          "MODE_READY": "Gereed",
-          "MODE_WORKING": "Bezig",
-          "MODE_RETURNING": "Aan het terugkeren",
-          "MODE_CHARGING": "Aan het opladen",
-          "MODE_UPDATING": "Aan het bijwerken",
-          "MODE_LOCK": "Vergrendeld",
-          "MODE_PAUSE": "Gepauzeerd",
-          "MODE_MANUAL_MOWING": "Handmatig aan het maaien",
-          "MODE_UPDATE_SUCCESS": "Bijwerken is gelukt",
-          "MODE_OTA_UPGRADE_FAIL": "Bijwerken mislukt",
-          "MODE_JOB_DRAW": "Taak aan het tekenen",
-          "MODE_OBSTACLE_DRAW": "Obstakels aan het tekenen",
-          "MODE_CHANNEL_DRAW": "Kanaal aan het tekenen",
-          "MODE_ERASER_DRAW": "Tekening aan het verwijderen",
-          "MODE_EDIT_BOUNDARY": "Grens aan het aanpassen",
-          "MODE_LOCATION_ERROR": "Locatie fout",
-          "MODE_BOUNDARY_JUMP": "Grens overschreden",
-          "MODE_CHARGING_PAUSE": "Opladen gepauzeerd",
-          "MODE_POWER_OFF": "Uitschakelen"
-        }
-      },
-      "work_area": {
-        "name": "Huidige locatie"
-      },
       "map_sync_status": {
         "name": "Kaartsynchronisatiestatus",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Online gemeld",
           "reported_offline": "Offline gemeld"
-        }
-      },
-      "task_area_status": {
-        "name": "Taakgebied {name}",
-        "state": {
-          "NOT_STARTED": "Niet gestart",
-          "WAITING": "Wachtend",
-          "MOWING": "Aan het maaien",
-          "COMPLETE": "Voltooid",
-          "ABORTED": "Afgebroken"
         }
       },
       "maintenance_distance": {
