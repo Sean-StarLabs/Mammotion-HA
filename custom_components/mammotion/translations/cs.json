@@ -75,6 +75,9 @@
       "error_1_code": {
         "name": "Kód poslední chyby"
       },
+      "latest_error": {
+        "name": "Poslední chyba"
+      },
       "battery_percent": {
         "name": "Baterie"
       },

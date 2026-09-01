@@ -75,6 +75,9 @@
       "error_1_code": {
         "name": "Seneste fejl kode"
       },
+      "latest_error": {
+        "name": "Seneste fejl"
+      },
       "battery_percent": {
         "name": "Batteri"
       },
