@@ -4,7 +4,6 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import time
-from functools import partial
 
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.sensor import (
@@ -22,7 +21,7 @@ from homeassistant.const import (
     UnitOfSpeed,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -32,7 +31,7 @@ from pymammotion.data.model.device import (
     PoolCleanerDevice,
     RTKBaseStationDevice,
 )
-from pymammotion.data.model.enums import RTKStatus, TaskAreaStatus
+from pymammotion.data.model.enums import RTKStatus
 from pymammotion.data.model.pool_state import SpinoSysStatus, SpinoWorkMode
 from pymammotion.utility.constant import VioState
 from pymammotion.utility.constant.device_constant import (
@@ -41,7 +40,6 @@ from pymammotion.utility.constant.device_constant import (
     RTKPositionMode,
     camera_brightness,
     device_connection,
-    device_mode,
 )
 from pymammotion.utility.device_type import DeviceType
 
@@ -49,7 +47,6 @@ from . import MammotionConfigEntry
 from .const import DOMAIN
 from .coordinator import (
     MAP_SYNC_STATUSES,
-    MammotionBaseUpdateCoordinator,
     MammotionDeviceErrorUpdateCoordinator,
     MammotionReportUpdateCoordinator,
     MammotionRTKCoordinator,
@@ -286,39 +283,6 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     MammotionSensorEntityDescription(
-        key="progress",
-        state_class=SensorStateClass.MEASUREMENT,
-        device_class=None,
-        native_unit_of_measurement=PERCENTAGE,
-        value_fn=lambda mower_data: mower_data.report_data.work.area >> 16,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    MammotionSensorEntityDescription(
-        key="total_time",
-        state_class=SensorStateClass.MEASUREMENT,
-        device_class=SensorDeviceClass.DURATION,
-        native_unit_of_measurement=UnitOfTime.MINUTES,
-        value_fn=lambda mower_data: mower_data.report_data.work.progress & 65535,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    MammotionSensorEntityDescription(
-        key="elapsed_time",
-        state_class=SensorStateClass.MEASUREMENT,
-        device_class=SensorDeviceClass.DURATION,
-        native_unit_of_measurement=UnitOfTime.MINUTES,
-        value_fn=lambda mower_data: (mower_data.report_data.work.progress & 65535)
-        - (mower_data.report_data.work.progress >> 16),
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    MammotionSensorEntityDescription(
-        key="left_time",
-        state_class=SensorStateClass.MEASUREMENT,
-        device_class=SensorDeviceClass.DURATION,
-        native_unit_of_measurement=UnitOfTime.MINUTES,
-        value_fn=lambda mower_data: mower_data.report_data.work.progress >> 16,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    MammotionSensorEntityDescription(
         key="non_work_hours",
         value_fn=lambda mower_data: MowerDataFormatter.format_time_range(
             mower_data.non_work_hours.start_time,
@@ -349,13 +313,6 @@ SENSOR_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
     #     native_unit_of_measurement=None,
     #     value_fn=lambda mower_data: (mower_data.report_data.dev.vslam_status & 65280) >> 8,
     # ),
-    MammotionSensorEntityDescription(
-        key="activity_mode",
-        state_class=None,
-        device_class=SensorDeviceClass.ENUM,
-        value_fn=lambda mower_data: device_mode(mower_data.report_data.dev.sys_status),
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
     MammotionSensorEntityDescription(
         key="positioning_mode",
         state_class=None,
@@ -481,17 +438,6 @@ LUBA_1_SIGNAL_TYPES: tuple[MammotionSensorEntityDescription, ...] = (
 )
 
 WORK_SENSOR_TYPES: tuple[MammotionWorkSensorEntityDescription, ...] = (
-    MammotionWorkSensorEntityDescription(
-        key="work_area",
-        state_class=None,
-        device_class=SensorDeviceClass.ENUM,
-        native_unit_of_measurement=None,
-        value_fn=lambda coordinator, mower_data: str(
-            coordinator.get_area_entity_name(mower_data.location.work_zone)
-            or "Not working"
-        ),
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
     MammotionWorkSensorEntityDescription(
         key="map_sync_status",
         state_class=None,
@@ -671,6 +617,37 @@ def _migrate_retired_error_sensors(
         registry.async_remove(entries_by_unique_id[retired_unique_id].entity_id)
 
 
+_PRIMARY_MOWER_SENSOR_DUPLICATES = {
+    "activity_mode",
+    "elapsed_time",
+    "left_time",
+    "progress",
+    "total_time",
+    "work_area",
+}
+
+
+def _cleanup_primary_mower_sensor_duplicates(
+    hass: HomeAssistant,
+    config_entry_id: str,
+    unique_name: str,
+) -> None:
+    """Remove registry entries now represented by the primary mower entity."""
+    registry = er.async_get(hass)
+    exact_unique_ids = {
+        f"{unique_name}_{key}" for key in _PRIMARY_MOWER_SENSOR_DUPLICATES
+    }
+    task_area_prefix = f"{unique_name}_"
+    for entry in er.async_entries_for_config_entry(registry, config_entry_id):
+        if entry.domain != SENSOR_DOMAIN or entry.platform != DOMAIN:
+            continue
+        if entry.unique_id in exact_unique_ids or (
+            entry.unique_id.startswith(task_area_prefix)
+            and entry.unique_id.endswith("_task_area")
+        ):
+            registry.async_remove(entry.entity_id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: MammotionConfigEntry,
@@ -682,6 +659,11 @@ async def async_setup_entry(
     entities = []
     for mower in mammotion_mowers:
         _migrate_retired_error_sensors(
+            hass,
+            entry.entry_id,
+            mower.reporting_coordinator.unique_name,
+        )
+        _cleanup_primary_mower_sensor_duplicates(
             hass,
             entry.entry_id,
             mower.reporting_coordinator.unique_name,
@@ -727,21 +709,6 @@ async def async_setup_entry(
 
         entities.append(MammotionErrorSensorEntity(mower.error_coordinator))
 
-        # Dynamic task-area sensors — one per zone in the active mow task.
-        # Added/removed as work_tasks_event.ids changes.
-        added_task_areas: set[int] = set()
-        task_area_entities: dict[int, MammotionTaskAreaSensorEntity] = {}
-        update_task_areas = partial(
-            async_add_task_area_entities,
-            mower.reporting_coordinator,
-            added_task_areas,
-            task_area_entities,
-            async_add_entities,
-        )
-        update_task_areas()
-        entry.async_on_unload(
-            mower.reporting_coordinator.async_add_listener(update_task_areas)
-        )
 
     mammotion_rtks = entry.runtime_data.RTK
     for rtk in mammotion_rtks:
@@ -909,120 +876,3 @@ class MammotionWorkSensorEntity(MammotionBaseEntity, SensorEntity):
     def native_value(self) -> StateType:
         """Return the state of the sensor."""
         return self.entity_description.value_fn(self.coordinator, self.coordinator.data)
-
-
-class MammotionTaskAreaSensorEntity(MammotionBaseEntity, SensorEntity):
-    """Dynamic per-zone task-status sensor, driven by a MammotionSensorEntityDescription.
-
-    One entity is created per zone hash present in work_tasks_event.ids.
-    native_value is driven by entity_description.value_fn so that enum changes
-    are reflected automatically on every coordinator update, exactly like all
-    other description-based sensors.
-
-    translation_key / translation_placeholders / device_class / options are all
-    read by HA from entity_description, so we never hard-code them on the class.
-    """
-
-    entity_description: MammotionSensorEntityDescription
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: MammotionReportUpdateCoordinator,
-        entity_description: MammotionSensorEntityDescription,
-    ) -> None:
-        """Initialise from a description that captures the zone hash via closure."""
-        super().__init__(coordinator, entity_description.key)
-        self.entity_description = entity_description
-        # Do NOT set _attr_translation_key here — HA reads it from
-        # entity_description.translation_key ("task_area_status").
-        # Do NOT set _attr_translation_placeholders — HA reads it from
-        # entity_description.translation_placeholders ({"name": area_name}).
-
-    @property
-    def native_value(self) -> StateType:
-        """Return the state via value_fn, identical to MammotionSensorEntity."""
-        return self.entity_description.value_fn(self.coordinator.data)
-
-    def update_name(self, new_name: str) -> None:
-        """Refresh the display name when the area is renamed on the device.
-
-        Overrides _attr_translation_placeholders so HA picks up the new name
-        on the next state write without recreating the entity.
-        """
-        self._attr_translation_placeholders = {"name": new_name}
-        if self.hass is not None:
-            self.async_write_ha_state()
-
-
-_TASK_AREA_OPTIONS: list[str] = [s.name for s in TaskAreaStatus]
-
-
-@callback
-def async_add_task_area_entities(
-    coordinator: MammotionReportUpdateCoordinator,
-    added_task_areas: set[int],
-    entities_by_hash: dict[int, MammotionTaskAreaSensorEntity],
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Sync task-area sensor entities with the current work_tasks_event.ids.
-
-    Called every time the coordinator updates.  New zone hashes get a new
-    sensor entity; hashes that have left the task have their entity removed
-    from the registry.
-    """
-    if coordinator.data is None:
-        return
-
-    current_ids: set[int] = set(coordinator.data.events.work_tasks_event.ids)
-
-    new_hashes = current_ids - added_task_areas
-    sensor_entities: list[MammotionTaskAreaSensorEntity] = []
-
-    for area_hash in sorted(new_hashes):
-        area_name = coordinator.get_area_entity_name(area_hash) or f"area {area_hash}"
-        if area_hash in entities_by_hash:
-            # Zone reappeared (e.g. task restarted) — refresh display name only.
-            entities_by_hash[area_hash].update_name(area_name)
-            added_task_areas.add(area_hash)
-            continue
-        description = MammotionSensorEntityDescription(
-            key=f"{area_hash}_task_area",
-            translation_key="task_area_status",
-            translation_placeholders={"name": area_name},
-            device_class=SensorDeviceClass.ENUM,
-            state_class=None,
-            options=_TASK_AREA_OPTIONS,
-            entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda mower_data, h=area_hash: getattr(
-                mower_data.events.work_tasks_event.hash_area_map.get(h), "name", None
-            ),
-        )
-        entity = MammotionTaskAreaSensorEntity(coordinator, description)
-        sensor_entities.append(entity)
-        entities_by_hash[area_hash] = entity
-        added_task_areas.add(area_hash)
-
-    old_hashes = added_task_areas - current_ids
-    if old_hashes:
-        _async_remove_task_area_entities(coordinator, old_hashes)
-        for h in old_hashes:
-            added_task_areas.discard(h)
-            entities_by_hash.pop(h, None)
-
-    if sensor_entities:
-        async_add_entities(sensor_entities)
-
-
-def _async_remove_task_area_entities(
-    coordinator: MammotionBaseUpdateCoordinator,
-    old_hashes: set[int],
-) -> None:
-    """Remove task-area sensor entities from the HA entity registry."""
-    registry = er.async_get(coordinator.hass)
-    for area_hash in old_hashes:
-        entity_id = registry.async_get_entity_id(
-            SENSOR_DOMAIN, DOMAIN, f"{coordinator.unique_name}_{area_hash}_task_area"
-        )
-        if entity_id:
-            registry.async_remove(entity_id)
