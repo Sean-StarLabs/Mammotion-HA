@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Hitrost košnje"
       },
-      "progress": {
-        "name": "Napredek"
-      },
-      "total_time": {
-        "name": "Skupni čas"
-      },
-      "elapsed_time": {
-        "name": "Pretečni čas"
-      },
-      "left_time": {
-        "name": "Preostali čas"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Neznano"
         }
       },
-      "activity_mode": {
-        "name": "Vrsta dejavnosti",
-        "state": {
-          "MODE_NOT_ACTIVE": "Neaktivno",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Onemogočeno",
-          "MODE_INITIALIZATION": "Inicializacija",
-          "MODE_READY": "Pripravljeno",
-          "MODE_WORKING": "Deluje",
-          "MODE_RETURNING": "Vrača se",
-          "MODE_CHARGING": "Polnjenje",
-          "MODE_UPDATING": "Posodabljanje",
-          "MODE_LOCK": "Zaklenjeno",
-          "MODE_PAUSE": "Zaustavljeno",
-          "MODE_MANUAL_MOWING": "Ročna košnja",
-          "MODE_UPDATE_SUCCESS": "Posodobitev uspešna",
-          "MODE_OTA_UPGRADE_FAIL": "Posodobitev neuspešna",
-          "MODE_JOB_DRAW": "Risanje naloge",
-          "MODE_OBSTACLE_DRAW": "Risanje ovir",
-          "MODE_CHANNEL_DRAW": "Risanje kanala",
-          "MODE_ERASER_DRAW": "Risanje radirke",
-          "MODE_EDIT_BOUNDARY": "Urejanje meje",
-          "MODE_LOCATION_ERROR": "Napaka lokacije",
-          "MODE_BOUNDARY_JUMP": "Prečkanje meje",
-          "MODE_CHARGING_PAUSE": "Polnjenje zaustavljeno",
-          "MODE_POWER_OFF": "Izklop"
-        }
-      },
-      "work_area": {
-        "name": "Trenutna lokacija"
-      },
       "map_sync_status": {
         "name": "Stanje sinhronizacije zemljevida",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Sporočeno na spletu",
           "reported_offline": "Sporočeno brez povezave"
-        }
-      },
-      "task_area_status": {
-        "name": "Področje naloge {name}",
-        "state": {
-          "NOT_STARTED": "Ni začeto",
-          "WAITING": "Čaka",
-          "MOWING": "Košnja",
-          "COMPLETE": "Dokončano",
-          "ABORTED": "Prekinjeno"
         }
       },
       "maintenance_distance": {

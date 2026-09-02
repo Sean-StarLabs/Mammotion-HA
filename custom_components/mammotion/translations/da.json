@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Klippehastighed"
       },
-      "progress": {
-        "name": "Fremskridt"
-      },
-      "total_time": {
-        "name": "Total tid"
-      },
-      "elapsed_time": {
-        "name": "Forløbet tid"
-      },
-      "left_time": {
-        "name": "Tid tilbage"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Ukendt"
         }
       },
-      "activity_mode": {
-        "name": "Aktivitetstilstand",
-        "state": {
-          "MODE_NOT_ACTIVE": "Ikke aktiv",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Deaktiveret",
-          "MODE_INITIALIZATION": "Initialiserer",
-          "MODE_READY": "Klar",
-          "MODE_WORKING": "Arbejder",
-          "MODE_RETURNING": "Vender tilbage",
-          "MODE_CHARGING": "Oplader",
-          "MODE_UPDATING": "Opdaterer",
-          "MODE_LOCK": "Låst",
-          "MODE_PAUSE": "Sat på pause",
-          "MODE_MANUAL_MOWING": "Manuel klipning",
-          "MODE_UPDATE_SUCCESS": "Opdatering lykkedes",
-          "MODE_OTA_UPGRADE_FAIL": "Opdatering fejlede",
-          "MODE_JOB_DRAW": "Tegner opgave",
-          "MODE_OBSTACLE_DRAW": "Tegner forhindringer",
-          "MODE_CHANNEL_DRAW": "Tegner kanal",
-          "MODE_ERASER_DRAW": "Tegner viskelæder",
-          "MODE_EDIT_BOUNDARY": "Redigerer grænse",
-          "MODE_LOCATION_ERROR": "Positionsfejl",
-          "MODE_BOUNDARY_JUMP": "Grænse overskredet",
-          "MODE_CHARGING_PAUSE": "Opladning sat på pause",
-          "MODE_POWER_OFF": "Slukker"
-        }
-      },
-      "work_area": {
-        "name": "Nuværende placering"
-      },
       "map_sync_status": {
         "name": "Kortsynkroniseringsstatus",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Rapporteret online",
           "reported_offline": "Rapporteret offline"
-        }
-      },
-      "task_area_status": {
-        "name": "Opgaveområde {name}",
-        "state": {
-          "NOT_STARTED": "Ikke startet",
-          "WAITING": "Venter",
-          "MOWING": "Klipper",
-          "COMPLETE": "Fuldført",
-          "ABORTED": "Afbrudt"
         }
       },
       "maintenance_distance": {

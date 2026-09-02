@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Mowing speed"
       },
-      "progress": {
-        "name": "Progress"
-      },
-      "total_time": {
-        "name": "Total time"
-      },
-      "elapsed_time": {
-        "name": "Elapsed time"
-      },
-      "left_time": {
-        "name": "Time left"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Unknown"
         }
       },
-      "activity_mode": {
-        "name": "Activity mode",
-        "state": {
-          "MODE_NOT_ACTIVE": "Not active",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Disabled",
-          "MODE_INITIALIZATION": "Initializing",
-          "MODE_READY": "Ready",
-          "MODE_WORKING": "Working",
-          "MODE_RETURNING": "Returning",
-          "MODE_CHARGING": "Charging",
-          "MODE_UPDATING": "Updating",
-          "MODE_LOCK": "Locked",
-          "MODE_PAUSE": "Paused",
-          "MODE_MANUAL_MOWING": "Manual mowing",
-          "MODE_UPDATE_SUCCESS": "Update successful",
-          "MODE_OTA_UPGRADE_FAIL": "Update failed",
-          "MODE_JOB_DRAW": "Drawing job",
-          "MODE_OBSTACLE_DRAW": "Drawing obstacles",
-          "MODE_CHANNEL_DRAW": "Drawing channel",
-          "MODE_ERASER_DRAW": "Drawing eraser",
-          "MODE_EDIT_BOUNDARY": "Editing boundary",
-          "MODE_LOCATION_ERROR": "Location error",
-          "MODE_BOUNDARY_JUMP": "Boundary crossed",
-          "MODE_CHARGING_PAUSE": "Charging paused",
-          "MODE_POWER_OFF": "Powering off"
-        }
-      },
-      "work_area": {
-        "name": "Current location"
-      },
       "map_sync_status": {
         "name": "Map sync status",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Reported online",
           "reported_offline": "Reported offline"
-        }
-      },
-      "task_area_status": {
-        "name": "Task area {name}",
-        "state": {
-          "NOT_STARTED": "Not started",
-          "WAITING": "Waiting",
-          "MOWING": "Mowing",
-          "COMPLETE": "Complete",
-          "ABORTED": "Aborted"
         }
       },
       "maintenance_distance": {

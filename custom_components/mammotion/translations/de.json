@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Mähgeschwindigkeit"
       },
-      "progress": {
-        "name": "Aufgabenfortschritt"
-      },
-      "total_time": {
-        "name": "Aufgabenzeit gesamt"
-      },
-      "elapsed_time": {
-        "name": "Aufgabenzeit vergangen"
-      },
-      "left_time": {
-        "name": "Aufgabenzeit verbleibend"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Unbekannt"
         }
       },
-      "activity_mode": {
-        "name": "Status",
-        "state": {
-          "MODE_NOT_ACTIVE": "Nicht aktiv",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Deaktiviert",
-          "MODE_INITIALIZATION": "Initialisiere",
-          "MODE_READY": "Bereit",
-          "MODE_WORKING": "Arbeitet",
-          "MODE_RETURNING": "Fährt zur Ladestation",
-          "MODE_CHARGING": "Lädt",
-          "MODE_UPDATING": "Wird aktualisiert",
-          "MODE_LOCK": "Gesperrt",
-          "MODE_PAUSE": "Pausiert",
-          "MODE_MANUAL_MOWING": "Manuelles Mähen",
-          "MODE_UPDATE_SUCCESS": "Aktualisierung erfolgreich",
-          "MODE_OTA_UPGRADE_FAIL": "Aktualisierung fehlgeschlagen",
-          "MODE_JOB_DRAW": "Erstellt Bereich",
-          "MODE_OBSTACLE_DRAW": "Erstellt No-Go-Zone",
-          "MODE_CHANNEL_DRAW": "Erstellt Passage",
-          "MODE_ERASER_DRAW": "Erstellt Muster",
-          "MODE_EDIT_BOUNDARY": "Bearbeitet Begrenzung",
-          "MODE_LOCATION_ERROR": "Fehler bei Standortbestimmung",
-          "MODE_BOUNDARY_JUMP": "Begrennzung überschritten",
-          "MODE_CHARGING_PAUSE": "Laden pausiert",
-          "MODE_POWER_OFF": "Ausschalten"
-        }
-      },
-      "work_area": {
-        "name": "Aktuelle Position"
-      },
       "map_sync_status": {
         "name": "Kartensynchronisierungsstatus",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Online gemeldet",
           "reported_offline": "Offline gemeldet"
-        }
-      },
-      "task_area_status": {
-        "name": "Bereichsstatus {name}",
-        "state": {
-          "NOT_STARTED": "Nicht gestartet",
-          "WAITING": "Warten",
-          "MOWING": "Mähen",
-          "COMPLETE": "Abgeschlossen",
-          "ABORTED": "Abgebrochen"
         }
       },
       "maintenance_distance": {

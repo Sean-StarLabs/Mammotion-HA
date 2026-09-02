@@ -34,6 +34,7 @@ from .const import DOMAIN, LOGGER
 from .control_state import MowerControlState
 from .coordinator import MammotionReportUpdateCoordinator
 from .entity import MammotionBaseEntity
+from .mower_attributes import mower_task_attributes
 
 SERVICE_START_MOWING = "start_mow"
 SERVICE_CANCEL_JOB = "cancel_job"
@@ -344,15 +345,12 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
     def activity(self) -> LawnMowerActivity | None:
         """Return the state of the mower."""
 
-        charge_state = self.rpt_dev_status.charge_state
         mode = self.rpt_dev_status.sys_status
         if mode is None:
             return None
 
         LOGGER.debug("activity mode %s", mode)
-        if mode in (WorkMode.MODE_PAUSE, WorkMode.MODE_CHARGING_PAUSE) or (
-            mode == WorkMode.MODE_READY and charge_state == 0
-        ):
+        if mode in (WorkMode.MODE_PAUSE, WorkMode.MODE_CHARGING_PAUSE):
             return LawnMowerActivity.PAUSED
         if mode == WorkMode.MODE_WORKING:
             return LawnMowerActivity.MOWING
@@ -360,9 +358,21 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
             return LawnMowerActivity.RETURNING
         if mode == WorkMode.MODE_LOCK:
             return LawnMowerActivity.ERROR
-        if mode == WorkMode.MODE_READY and charge_state != 0:
-            return LawnMowerActivity.DOCKED
+        if mode == WorkMode.MODE_READY:
+            return (
+                LawnMowerActivity.DOCKED
+                if self.control_state.on_charger
+                else LawnMowerActivity.PAUSED
+            )
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose task details on the primary mower entity."""
+        return mower_task_attributes(
+            self.coordinator.data,
+            self.coordinator.get_area_entity_name,
+        )
 
     async def _async_task_control(
         self,
