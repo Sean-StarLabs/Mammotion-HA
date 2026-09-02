@@ -32,6 +32,7 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_ACCOUNTNAME,
     CONF_BLE_DEVICES,
+    CONF_CLOUD_AUTH_BACKOFF_UNTIL,
     CONF_DEVICE_NAME,
     CONF_HAS_CLOUD_ACCOUNT,
     CONF_MOVEMENT_USE_WIFI,
@@ -299,6 +300,7 @@ class MammotionConfigFlow(ConfigFlow, domain=DOMAIN):
             assert entry
 
         errors: dict[str, str] = {}
+        is_reauth = self.context.get("source") == config_entries.SOURCE_REAUTH
 
         if user_input:
             account = (user_input.get(CONF_ACCOUNTNAME) or "").strip()
@@ -307,7 +309,10 @@ class MammotionConfigFlow(ConfigFlow, domain=DOMAIN):
             has_cloud_account = False
             account_id = entry.data.get(CONF_ACCOUNT_ID)
 
-            if account and password:
+            if is_reauth and (not account or not password):
+                errors["base"] = "login_failed"
+
+            if account and password and not errors:
                 integration = await async_get_integration(self.hass, DOMAIN)
                 temp_client = MammotionClient(
                     ha_version=integration.version.split("-")[0]
@@ -321,8 +326,17 @@ class MammotionConfigFlow(ConfigFlow, domain=DOMAIN):
                         temp_client.mammotion_http is not None
                         and temp_client.mammotion_http.login_info is not None
                     ):
-                        has_cloud_account = True
-                        account_id = temp_client.mammotion_http.login_info.userInformation.userAccount
+                        authenticated_account_id = temp_client.mammotion_http.login_info.userInformation.userAccount
+                        if (
+                            is_reauth
+                            and entry.data.get(CONF_ACCOUNT_ID)
+                            and authenticated_account_id
+                            != entry.data.get(CONF_ACCOUNT_ID)
+                        ):
+                            errors["base"] = "login_failed"
+                        else:
+                            has_cloud_account = True
+                            account_id = authenticated_account_id
                     else:
                         errors["base"] = "login_failed"
                 except TooManyRequestsException:
@@ -334,7 +348,8 @@ class MammotionConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors["base"] = "cannot_connect"
                 finally:
                     await temp_client.stop()
-                    store_cloud_credentials(self.hass, entry, temp_client)
+                    if has_cloud_account and not errors:
+                        store_cloud_credentials(self.hass, entry, temp_client)
 
             if not errors:
                 updated_entry = self.hass.config_entries.async_get_entry(
@@ -346,14 +361,20 @@ class MammotionConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(
                     entry=updated_entry,
                     data={
-                        **updated_entry.data,
+                        **{
+                            key: value
+                            for key, value in updated_entry.data.items()
+                            if key != CONF_CLOUD_AUTH_BACKOFF_UNTIL
+                        },
                         CONF_ACCOUNTNAME: account or None,
                         CONF_PASSWORD: password or None,
                         CONF_ACCOUNT_ID: account_id,
                         CONF_USE_WIFI: bool(account),
                         CONF_HAS_CLOUD_ACCOUNT: has_cloud_account,
                     },
-                    reason="reconfigure_successful",
+                    reason=(
+                        "reauth_successful" if is_reauth else "reconfigure_successful"
+                    ),
                 )
 
         schema = {
@@ -366,10 +387,20 @@ class MammotionConfigFlow(ConfigFlow, domain=DOMAIN):
         }
 
         return self.async_show_form(
-            step_id="reconfigure",
+            step_id="reauth_confirm" if is_reauth else "reconfigure",
             data_schema=vol.Schema(schema),
             errors=errors,
         )
+
+    async def async_step_reauth(self, _entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """Prompt for refreshed cloud credentials without unloading BLE support."""
+        return await self.async_step_reconfigure()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Validate credentials submitted by the reauthentication form."""
+        return await self.async_step_reconfigure(user_input)
 
 
 class MammotionConfigFlowHandler(OptionsFlow):
