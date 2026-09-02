@@ -38,6 +38,7 @@ from .coordinator import (
     MammotionSpinoCoordinator,
 )
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
+from .operation_settings import retain_known_areas
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -430,21 +431,26 @@ class MammotionConfigSwitchEntity(MammotionBaseEntity, SwitchEntity, RestoreEnti
         """Turn the entity on."""
         self._attr_is_on = True
         self.entity_description.set_fn(self.coordinator, True)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the entity off."""
         self._attr_is_on = False
         self.entity_description.set_fn(self.coordinator, False)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
+        if self.coordinator.operation_settings_restored:
+            return
         if not (last_state := await self.async_get_last_state()):
             return
         self._attr_is_on = last_state.state == STATE_ON
         self.entity_description.set_fn(self.coordinator, self._attr_is_on)
+        self.coordinator.async_save_operation_settings()
 
     async def async_update(self) -> None:
         """Update the entity state."""
@@ -512,6 +518,7 @@ class MammotionConfigAreaSwitchEntity(MammotionBaseEntity, SwitchEntity, Restore
             self.coordinator.operation_settings.areas.remove(old_area)
             if new_area_id not in self.coordinator.operation_settings.areas:
                 self.coordinator.operation_settings.areas.append(new_area_id)
+            self.coordinator.async_save_operation_settings()
         self._attr_is_on = new_area_id in self.coordinator.operation_settings.areas
         if self.hass is not None:
             self.async_write_ha_state()
@@ -520,12 +527,14 @@ class MammotionConfigAreaSwitchEntity(MammotionBaseEntity, SwitchEntity, Restore
         """Turn the entity on."""
         self._attr_is_on = True
         self.entity_description.set_fn(self.coordinator, True, self.area)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the entity off."""
         self._attr_is_on = False
         self.entity_description.set_fn(self.coordinator, False, self.area)
+        self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
@@ -533,6 +542,8 @@ class MammotionConfigAreaSwitchEntity(MammotionBaseEntity, SwitchEntity, Restore
         await super().async_added_to_hass()
         # Seed with any existing name override so we only push live user edits.
         self._pushed_name = self.registry_entry.name if self.registry_entry else None
+        if self.coordinator.operation_settings_restored:
+            return
         last_state = await self.async_get_last_state()
         if last_state and last_state.state == STATE_ON:
             await self.async_turn_on()
@@ -636,6 +647,8 @@ def async_add_area_entities(  # noqa: C901
     )
     if area_membership_loaded and area_identity_loaded:
         _async_migrate_named_area_registry_entries(coordinator, area_names_by_hash)
+        if retain_known_areas(coordinator.operation_settings, all_current_areas):
+            coordinator.async_save_operation_settings()
 
     # Early exit when neither the set of area hashes nor any name has changed.
     if all_current_areas == added_areas:
