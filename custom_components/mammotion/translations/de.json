@@ -628,6 +628,11 @@
     },
     "device_tracker": {
       "name": "Geräteverfolgung"
+    },
+    "image": {
+      "map": {
+        "name": "Karte"
+      }
     }
   },
   "selector": {

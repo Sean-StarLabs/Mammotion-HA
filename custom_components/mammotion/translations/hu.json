@@ -628,6 +628,11 @@
     },
     "device_tracker": {
       "name": "Eszközkövetés"
+    },
+    "image": {
+      "map": {
+        "name": "Térkép"
+      }
     }
   },
   "selector": {

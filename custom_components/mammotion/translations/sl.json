@@ -628,6 +628,11 @@
     },
     "device_tracker": {
       "name": "Sledenje"
+    },
+    "image": {
+      "map": {
+        "name": "Zemljevid"
+      }
     }
   },
   "selector": {
