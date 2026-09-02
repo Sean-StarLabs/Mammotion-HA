@@ -18,6 +18,7 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _MODULE
 _SPEC.loader.exec_module(_MODULE)
 MowerControlState = _MODULE.MowerControlState
+route_setting_available = _MODULE.route_setting_available
 
 
 @pytest.mark.parametrize(
@@ -83,3 +84,26 @@ def test_dock_is_hidden_when_position_reports_charger() -> None:
 
     assert state.can_start
     assert not state.can_dock
+
+
+@pytest.mark.parametrize(
+    ("mode", "runtime_supported", "expected"),
+    [
+        (WorkMode.MODE_READY, False, True),
+        (WorkMode.MODE_INITIALIZATION, False, True),
+        (WorkMode.MODE_WORKING, True, True),
+        (WorkMode.MODE_WORKING, False, False),
+        (WorkMode.MODE_PAUSE, True, False),
+        (WorkMode.MODE_RETURNING, True, False),
+        (WorkMode.MODE_LOCK, True, False),
+    ],
+)
+def test_route_setting_availability(
+    mode: int,
+    runtime_supported: bool,
+    expected: bool,
+) -> None:
+    """Only verified live modifiers remain available during an active task."""
+    assert (
+        route_setting_available(mode, runtime_supported=runtime_supported) is expected
+    )

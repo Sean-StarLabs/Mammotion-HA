@@ -514,7 +514,10 @@ class MammotionLawnMowerEntity(MammotionBaseEntity, LawnMowerEntity):  # type: i
                     translation_domain=DOMAIN,
                     translation_key="device_not_ready",
                 )
-            if not await self.coordinator.async_modify_plan_route(operational_settings):
+            if not await self.coordinator.async_modify_plan_route(
+                operational_settings,
+                preempt_reads=True,
+            ):
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,
                     translation_key="start_failed",
