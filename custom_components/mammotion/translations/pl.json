@@ -66,14 +66,8 @@
   },
   "entity": {
     "sensor": {
-      "error_1_message": {
+      "latest_error": {
         "name": "Ostatni błąd"
-      },
-      "error_1_time": {
-        "name": "Czas ostatniego błędu"
-      },
-      "error_1_code": {
-        "name": "Ostatni kod błędu"
       },
       "battery_percent": {
         "name": "Bateria"
