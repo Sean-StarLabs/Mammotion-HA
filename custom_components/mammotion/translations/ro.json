@@ -565,6 +565,11 @@
     },
     "device_tracker": {
       "name": "Monitorizarea dispozitivului"
+    },
+    "image": {
+      "map": {
+        "name": "Hartă"
+      }
     }
   },
   "selector": {

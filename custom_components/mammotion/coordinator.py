@@ -1543,7 +1543,9 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
 
         return _wrapper
 
-    def subscribe_map_updated(self, handler: Callable[[], None]) -> None:
+    def subscribe_map_updated(
+        self, handler: Callable[[], None]
+    ) -> Callable[[], None] | None:
         """Subscribe *handler* to map-updated events from the device handle.
 
         Fires only when ``toapp_all_hash_name`` is received or a ``MapFetchSaga``
@@ -1552,13 +1554,21 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         """
         handle = self.manager.mower(self.device_name)
         if handle is None:
-            return
+            return None
 
         async def _on_map_updated() -> None:
             if not self.hass.is_stopping:
                 handler()
 
-        self._subscriptions.append(handle.subscribe_map_updated(_on_map_updated))
+        subscription = handle.subscribe_map_updated(_on_map_updated)
+        self._subscriptions.append(subscription)
+
+        def _unsubscribe() -> None:
+            subscription.cancel()
+            if subscription in self._subscriptions:
+                self._subscriptions.remove(subscription)
+
+        return _unsubscribe
 
     async def async_shutdown(self) -> None:
         """Flush queued state, cancel RAII subscriptions and shut down the coordinator."""
