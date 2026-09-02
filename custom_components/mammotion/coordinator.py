@@ -29,7 +29,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.debounce import Debouncer
-from homeassistant.helpers.event import async_call_later, async_track_time_interval
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from mashumaro.exceptions import InvalidFieldValue
 from pymammotion.aliyun.exceptions import (
@@ -102,6 +102,7 @@ from .operation_settings import (
     deserialize_operation_settings,
     serialize_operation_settings,
 )
+from .trail_state import native_trail_signature
 
 if TYPE_CHECKING:
     from . import MammotionConfigEntry
@@ -109,7 +110,6 @@ if TYPE_CHECKING:
 MAINTENANCE_INTERVAL = timedelta(minutes=60)
 DEFAULT_INTERVAL = timedelta(minutes=30)
 REPORT_INTERVAL = timedelta(minutes=5)
-DYNAMICS_LINE_INTERVAL = timedelta(seconds=10)
 DEVICE_VERSION_INTERVAL = timedelta(weeks=1)
 MAP_INTERVAL = timedelta(minutes=60)
 RTK_INTERVAL = timedelta(hours=5)
@@ -1671,6 +1671,9 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
         )
 
         self._on_stop: list[CALLBACK_TYPE] = []
+        self._last_native_trail_signature: (
+            tuple[object, object, object, object, object, int, int] | None
+        ) = None
 
         self.poll_debouncer = Debouncer(
             hass,
@@ -1680,6 +1683,15 @@ class MammotionReportUpdateCoordinator(MammotionBaseUpdateCoordinator[MowingDevi
             function=self._add_ble_device,
             background=True,
         )
+
+    async def _on_state_changed(self, snapshot: DeviceSnapshot) -> None:
+        """Persist native route changes and push the latest mower state."""
+        await super()._on_state_changed(snapshot)
+        signature = native_trail_signature(snapshot.raw.map)
+        if signature == self._last_native_trail_signature:
+            return
+        self._last_native_trail_signature = signature
+        self.async_save_data(snapshot.raw)
 
     @callback
     def _async_handle_bluetooth_event(
@@ -2123,8 +2135,6 @@ class MammotionDeviceVersionUpdateCoordinator(
 class MammotionMapUpdateCoordinator(MammotionBaseUpdateCoordinator[MowerInfo]):
     """Class to manage fetching mammotion data."""
 
-    _dynamics_line_cancel: CALLBACK_TYPE | None = None
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -2193,71 +2203,12 @@ class MammotionMapUpdateCoordinator(MammotionBaseUpdateCoordinator[MowerInfo]):
         assert _d is not None
         return _d.mower_state
 
-    def _device_supports_dynamics_line(self) -> bool:
-        """Return True if this device supports the dynamics-line mow-progress stream."""
-        device = self.manager.get_device_by_name(self.device_name)
-        firmware = device.device_firmwares.main_controller if device else None
-        return DeviceType.value_of_str(self.device_name).is_support_dynamics_line(
-            firmware
-        )
-
-    def _ble_is_connected(self) -> bool:
-        """Return True if BLE transport exists and is currently connected."""
-        if handle := self.manager.mower(self.device_name):
-            if ble := handle.get_transport(TransportType.BLE):
-                return ble.is_connected
-        return False
-
-    def _stop_dynamics_line_poll(self) -> None:
-        if self._dynamics_line_cancel is not None:
-            self._dynamics_line_cancel()
-            self._dynamics_line_cancel = None
-
-    async def _on_sys_status_changed_dynamics(self, sys_status: int) -> None:
-        """Start the dynamics-line poll when mowing over BLE; stop it otherwise."""
-        if (
-            sys_status in MOWING_ACTIVE_MODES
-            and self._device_supports_dynamics_line()
-            and self._ble_is_connected()
-        ):
-            if self._dynamics_line_cancel is None:
-                self._dynamics_line_cancel = async_track_time_interval(
-                    self.hass,
-                    self._fetch_dynamics_line,
-                    DYNAMICS_LINE_INTERVAL,
-                )
-        else:
-            self._stop_dynamics_line_poll()
-
-    async def _fetch_dynamics_line(self, _now: datetime.datetime) -> None:
-        """Fetch the dynamics line; self-cancels if BLE has disconnected."""
-        if not self._ble_is_connected():
-            self._stop_dynamics_line_poll()
-            return
-        try:
-            await self.manager.get_dynamics_line(self.device_name)
-            device = self.manager.get_device_by_name(self.device_name)
-            if device is not None:
-                self.async_set_updated_data(device.mower_state)
-        except (
-            DeviceOfflineException,
-            NoTransportAvailableError,
-            GatewayTimeoutException,
-        ):
-            pass
-
     async def _async_setup(self) -> None:
         """Set up coordinator with initial call to get map data."""
         await super()._async_setup()
         device = self.manager.get_device_by_name(self.device_name)
         if device is None:
             return
-
-        if handle := self.manager.mower(self.device_name):
-            handle.watch_field(
-                lambda s: s.raw.report_data.dev.sys_status,
-                self._on_sys_status_changed_dynamics,
-            )
 
         if not device.enabled or not device.online:
             return
