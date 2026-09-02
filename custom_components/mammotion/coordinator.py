@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
+import betterproto2
 from habluetooth import BluetoothScanningMode
 from habluetooth.models import BluetoothServiceInfoBleak
 from homeassistant.components import bluetooth
@@ -486,22 +487,33 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         except EXPIRED_CREDENTIAL_EXCEPTIONS as exc:
             self.update_failures += 1
             await self.async_refresh_login(exc)
-        except DeviceOfflineException:
+        except DeviceOfflineException as exc:
             device = self.manager.get_device_by_name(self.device_name)
             if device is not None:
                 self.device_offline(device)
+            if kwargs.get("preempt_reads"):
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="command_failed"
+                ) from exc
         except TooManyRequestsException as exc:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="api_limit_exceeded"
             ) from exc
         except NoTransportAvailableError as exc:
             LOGGER.debug(f"No Transport: {exc}")
-        except (
-            GatewayTimeoutException,
-            CommandTimeoutError,
-            ConcurrentRequestError,
-        ):
+            if kwargs.get("preempt_reads"):
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="command_failed"
+                ) from exc
+        except (GatewayTimeoutException, CommandTimeoutError):
+            # The mower can apply a command even when its ACK is delayed or lost.
+            # Callers that need confirmation must verify newer report telemetry.
             pass
+        except ConcurrentRequestError as exc:
+            if kwargs.get("preempt_reads"):
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="command_failed"
+                ) from exc
         except asyncio.CancelledError:
             # bleak_retry_connector raises CancelledError when no BLE slot is
             # available (it cancels its own internal sleep).  Re-raise only when
@@ -1084,6 +1096,29 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         """Fire a one-shot snapshot if device state is older than 2 minutes."""
         await self.manager.ensure_fresh_state(self.device_name, max_age_s=120.0)
 
+    async def async_ensure_fresh_report_data(self) -> bool:
+        """Wait until command decisions can use recent device telemetry."""
+        if not self.command_ready:
+            return False
+        return await self.manager.ensure_fresh_report_data(
+            self.device_name,
+            max_age_s=5.0,
+            timeout=10.0,
+        )
+
+    @property
+    def report_data_token(self) -> int:
+        """Return the generation of the latest applied telemetry report."""
+        return self.manager.report_data_token(self.device_name)
+
+    async def async_wait_for_report_data(self, *, since: int, timeout: float) -> bool:
+        """Wait for telemetry newer than *since*."""
+        return await self.manager.wait_for_report_data(
+            self.device_name,
+            since=since,
+            timeout=timeout,
+        )
+
     async def send_svg_command(self, svg_message: SvgMessage) -> int | None:
         """Send an SVG tile to the device using the multi-frame saga protocol.
 
@@ -1143,7 +1178,10 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         return route_information
 
     async def async_plan_route(
-        self, operation_settings: OperationSettings
+        self,
+        operation_settings: OperationSettings,
+        *,
+        preempt_reads: bool = False,
     ) -> bool | None:
         """Plan mow."""
         route_information = self.generate_route_information(operation_settings)
@@ -1154,12 +1192,33 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
         #     and route_information.toward_mode == 0
         # ):
         #     route_information.toward = 0
-        await self.async_send_and_wait(
+        response = await self.async_send_and_wait(
             "generate_route_information",
             "bidire_reqconver_path",
+            preempt_reads=preempt_reads,
             generate_route_information=route_information,
         )
-        return True
+        return self.route_response_succeeded(response)
+
+    @staticmethod
+    def route_response_succeeded(response: Any | None) -> bool:
+        """Return whether a route request was accepted by the mower."""
+        if response is None:
+            return False
+        try:
+            field, route = betterproto2.which_one_of(response.nav, "SubNavMsg")
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return field == "bidire_reqconver_path" and int(route.result) == 0
+
+    async def async_query_plan_route(self, *, preempt_reads: bool = False) -> bool:
+        """Fetch the mower's retained plan and report whether it was accepted."""
+        response = await self.async_send_and_wait(
+            "query_generate_route_information",
+            "bidire_reqconver_path",
+            preempt_reads=preempt_reads,
+        )
+        return self.route_response_succeeded(response)
 
     async def async_get_plan_route(self, operation_settings: OperationSettings) -> None:
         """Fetch the previously generated mow path from the device without replanning."""
@@ -1298,6 +1357,12 @@ class MammotionBaseUpdateCoordinator[DataT](DataUpdateCoordinator[DataT]):  # ty
             self.device_name,
             serialize_operation_settings(self._operation_settings),
         )
+
+    @callback
+    def async_area_selection_changed(self) -> None:
+        """Persist an area selection and refresh dependent mower controls."""
+        self.async_save_operation_settings()
+        self.async_update_listeners()
 
     async def async_modify_plan_if_mowing(self) -> None:
         """Re-plan the current mow route if the device is actively mowing."""
