@@ -61,6 +61,7 @@ def _entity(mode: WorkMode, *responses: LubaMsg) -> MammotionLawnMowerEntity:
     entity._start_dispatching = False
     entity._start_dispatched = False
     entity._start_outcome_uncertain = False
+    entity._start_outcome_report_token = 0
     entity.coordinator = SimpleNamespace(
         data=SimpleNamespace(
             report_data=SimpleNamespace(

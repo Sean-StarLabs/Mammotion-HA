@@ -99,18 +99,6 @@
       "mowing_speed": {
         "name": "Velocità di taglio"
       },
-      "progress": {
-        "name": "Progresso"
-      },
-      "total_time": {
-        "name": "Tempo totale"
-      },
-      "elapsed_time": {
-        "name": "Tempo trascorso"
-      },
-      "left_time": {
-        "name": "Tempo rimanente"
-      },
       "l1_satellites": {
         "name": "L1 signal quality"
       },
@@ -148,38 +136,6 @@
           "SIGNAL_UNKNOWN": "Sconosciuto"
         }
       },
-      "activity_mode": {
-        "name": "Modalità attività",
-        "state": {
-          "MODE_NOT_ACTIVE": "Inattivo",
-          "MODE_ONLINE": "Online",
-          "MODE_OFFLINE": "Offline",
-          "MODE_DISABLE": "Disabilitato",
-          "MODE_INITIALIZATION": "Inizializzazione",
-          "MODE_READY": "Pronto",
-          "MODE_WORKING": "In funzione",
-          "MODE_RETURNING": "Di ritorno",
-          "MODE_CHARGING": "In carica",
-          "MODE_UPDATING": "Aggiornamento",
-          "MODE_LOCK": "Bloccato",
-          "MODE_PAUSE": "In pausa",
-          "MODE_MANUAL_MOWING": "Taglio manuale",
-          "MODE_UPDATE_SUCCESS": "Aggiornamento riuscito",
-          "MODE_OTA_UPGRADE_FAIL": "Aggiornamento fallito",
-          "MODE_JOB_DRAW": "Disegno attività",
-          "MODE_OBSTACLE_DRAW": "Disegno ostacoli",
-          "MODE_CHANNEL_DRAW": "Disegno corridoio",
-          "MODE_ERASER_DRAW": "Cancellino da disegno",
-          "MODE_EDIT_BOUNDARY": "Modifica del confine",
-          "MODE_LOCATION_ERROR": "Errore di posizione",
-          "MODE_BOUNDARY_JUMP": "Confine attraversato",
-          "MODE_CHARGING_PAUSE": "Ricarica in pausa",
-          "MODE_POWER_OFF": "Spegnimento"
-        }
-      },
-      "work_area": {
-        "name": "Posizione attuale"
-      },
       "map_sync_status": {
         "name": "Stato sincronizzazione mappa",
         "state": {
@@ -193,16 +149,6 @@
         "state": {
           "reported_online": "Segnalato online",
           "reported_offline": "Segnalato offline"
-        }
-      },
-      "task_area_status": {
-        "name": "Area attività {name}",
-        "state": {
-          "NOT_STARTED": "Non avviato",
-          "WAITING": "In attesa",
-          "MOWING": "In falciatura",
-          "COMPLETE": "Completato",
-          "ABORTED": "Interrotto"
         }
       },
       "maintenance_distance": {

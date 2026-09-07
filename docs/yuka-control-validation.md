@@ -42,6 +42,7 @@ When a safety action preempts a Start that may already have reached the mower,
 Pause uses the fresh-start confirmation window so Dock can wait through route
 planning. If the mower reports a paused breakpoint while still on its charger,
 Dock cancels that retained task before returning.
+`Ready` plus the reported charger position is treated as `docked`.
 
 ## Runtime scenarios
 
