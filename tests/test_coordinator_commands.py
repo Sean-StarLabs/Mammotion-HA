@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -68,6 +68,32 @@ MammotionBaseEntity = _load_entity_module().MammotionBaseEntity
 class _TestCoordinator(MammotionBaseUpdateCoordinator):
     def get_coordinator_data(self, device: object) -> object:
         return device
+
+
+def test_area_selection_refreshes_dependent_entities() -> None:
+    """Area changes immediately refresh the mower's supported controls."""
+    coordinator = object.__new__(_TestCoordinator)
+    coordinator.async_save_operation_settings = MagicMock()
+    coordinator.async_update_listeners = MagicMock()
+
+    coordinator.async_area_selection_changed()
+
+    coordinator.async_save_operation_settings.assert_called_once_with()
+    coordinator.async_update_listeners.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_unreleased_report_freshness_api_fails_closed() -> None:
+    """Released PyMammotion cannot crash command availability checks."""
+    coordinator = object.__new__(_TestCoordinator)
+    coordinator.device_name = "Yuka-test"
+    coordinator.manager = SimpleNamespace(
+        mower=lambda _device_name: SimpleNamespace(has_usable_transport=True)
+    )
+
+    assert not await coordinator.async_ensure_fresh_report_data()
+    assert coordinator.report_data_token == 0
+    assert not await coordinator.async_wait_for_report_data(since=0, timeout=0.1)
 
 
 @pytest.mark.asyncio
