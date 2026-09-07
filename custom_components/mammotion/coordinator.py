@@ -2227,56 +2227,6 @@ class MammotionDeviceErrorUpdateCoordinator(
             except json.JSONDecodeError:
                 """Failed to parse warning event."""
 
-    def get_error_code(self, number: int) -> int:
-        """Get error code from an error code list."""
-        try:
-            return int(abs(next(iter(self.data.errors.err_code_list))))
-        except StopIteration:
-            return 0
-
-    def get_error_time(self, number: int) -> datetime.datetime | None:
-        """Get error time from an error code list."""
-        try:
-            return datetime.datetime.fromtimestamp(
-                next(iter(self.data.errors.err_code_list_time)), datetime.UTC
-            )
-        except StopIteration:
-            return None
-
-    def get_error_message(self, number: int) -> str:
-        """Return error message."""
-        try:
-            error_code: int = next(iter(self.data.errors.err_code_list))
-
-            error_code = abs(error_code)
-            error_info: ErrorInfo = self.data.errors.error_codes[f"{error_code}"]
-
-            implication = (
-                getattr(error_info, f"{self.hass.config.language}_implication")
-                if hasattr(error_info, f"{self.hass.config.language}_implication")
-                else error_info.en_implication
-            )
-            solution = (
-                getattr(error_info, f"{self.hass.config.language}_solution")
-                if hasattr(error_info, f"{self.hass.config.language}_solution")
-                else error_info.en_solution
-            )
-
-            if implication == "":
-                implication = error_info.en_implication
-
-            if solution == "":
-                solution = error_info.en_solution
-
-            return f"{error_info.module}: {implication}, {solution}"
-
-        except StopIteration:
-            """Failed to get error code."""
-            return "No Error"
-        except KeyError:
-            """Failed to get error message."""
-            return "Error message not found"
-
     async def _async_update_data(self) -> MowingDevice:
         """Get data from the device."""
         if data := await super()._async_update_data():

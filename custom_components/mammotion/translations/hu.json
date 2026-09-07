@@ -66,14 +66,8 @@
   },
   "entity": {
     "sensor": {
-      "error_1_message": {
+      "latest_error": {
         "name": "Utolsó hiba"
-      },
-      "error_1_time": {
-        "name": "Utolsó hiba ideje"
-      },
-      "error_1_code": {
-        "name": "Utolsó hibakód"
       },
       "battery_percent": {
         "name": "Akkumulátor"

@@ -66,14 +66,8 @@
   },
   "entity": {
     "sensor": {
-      "error_1_message": {
+      "latest_error": {
         "name": "Senaste fel"
-      },
-      "error_1_time": {
-        "name": "Senaste fel-tid"
-      },
-      "error_1_code": {
-        "name": "Senaste felkod"
       },
       "battery_percent": {
         "name": "Batteri"
