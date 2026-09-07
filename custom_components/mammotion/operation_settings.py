@@ -1,5 +1,6 @@
 """Serialization helpers for mower operation settings."""
 
+from dataclasses import replace
 from typing import Any
 
 from mashumaro.exceptions import InvalidFieldValue
@@ -13,6 +14,11 @@ def option_for_value(
 ) -> str | None:
     """Return the option whose encoded value matches a stored setting."""
     return next((option for option in options if values.get(option) == value), None)
+
+
+def clone_operation_settings(settings: OperationSettings) -> OperationSettings:
+    """Return an independent settings snapshot for route generation."""
+    return replace(settings, areas=list(settings.areas))
 
 
 def retain_known_areas(

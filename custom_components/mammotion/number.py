@@ -23,10 +23,12 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pymammotion.data.model.device import PoolCleanerDevice
 from pymammotion.data.model.device_limits import DeviceLimits
+from pymammotion.utility.constant import WorkMode
 from pymammotion.utility.device_config import DeviceConfig
 from pymammotion.utility.device_type import DeviceType
 
 from . import MammotionConfigEntry
+from .control_state import route_setting_available
 from .coordinator import MammotionBaseUpdateCoordinator, MammotionSpinoCoordinator
 from .entity import MammotionBaseEntity, MammotionBaseSpinoEntity
 from .operation_settings import should_restore_number_state
@@ -332,14 +334,34 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
 
     async def async_set_native_value(self, value: float) -> None:
         """Set native value for number."""
+        previous_value = self._attr_native_value
         self._attr_native_value = value
         if self.entity_description.set_fn is not None:
             self.entity_description.set_fn(self.coordinator, value)
-        if self.entity_description.set_async_fn is not None:
-            await self.entity_description.set_async_fn(self.coordinator, value)
+        try:
+            if self.entity_description.set_async_fn is not None:
+                await self.entity_description.set_async_fn(self.coordinator, value)
+        except Exception:
+            self._attr_native_value = previous_value
+            if (
+                self.entity_description.set_fn is not None
+                and previous_value is not None
+            ):
+                self.entity_description.set_fn(self.coordinator, previous_value)
+            raise
         if self.entity_description.route_setting:
             self.coordinator.async_save_operation_settings()
         self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Return whether this route setting can currently be changed."""
+        if not self.entity_description.route_setting:
+            return super().available
+        return super().available and route_setting_available(
+            self.coordinator.data.report_data.dev.sys_status,
+            runtime_supported=self.entity_description.set_async_fn is not None,
+        )
 
     async def async_added_to_hass(self) -> None:
         """Restore last saved value when entity is added to hass."""
@@ -354,7 +376,9 @@ class MammotionConfigNumberEntity(MammotionBaseEntity, RestoreNumber):  # type: 
             last_number_data.native_value is not None
         ):
             self._attr_native_value = last_number_data.native_value
-            if self.entity_description.set_fn is not None:
+            if (
+                self.entity_description.set_fn is not None
+            ):
                 self.entity_description.set_fn(
                     self.coordinator, cast(float, self._attr_native_value)
                 )
@@ -373,6 +397,7 @@ class MammotionWorkingNumberEntity(MammotionConfigNumberEntity):
     ) -> None:
         """Init MammotionWorkingNumberEntity."""
         super().__init__(coordinator, entity_description)
+        self._setting_lock = coordinator.operation_settings_lock
 
         if limits is not None and hasattr(limits, entity_description.key):
             self._attr_native_min_value = getattr(limits, entity_description.key).min
@@ -404,15 +429,31 @@ class MammotionWorkingNumberEntity(MammotionConfigNumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set native value for number and call update_fn if defined."""
-        if self._attr_native_value == value:
-            return
-        self._attr_native_value = value
-        if self.entity_description.set_fn is not None:
-            self.entity_description.set_fn(self.coordinator, value)
-        if self.entity_description.set_async_fn is not None:
-            await self.entity_description.set_async_fn(self.coordinator, value)
-        self.coordinator.async_save_operation_settings()
-        self.async_write_ha_state()
+        async with self._setting_lock:
+            if self._attr_native_value == value and not (
+                self.entity_description.set_async_fn is not None
+                and self.coordinator.data.report_data.dev.sys_status
+                == WorkMode.MODE_WORKING
+            ):
+                return
+            previous_value = self._attr_native_value
+            self._attr_native_value = value
+            if self.entity_description.set_fn is not None:
+                self.entity_description.set_fn(self.coordinator, value)
+            try:
+                if self.entity_description.set_async_fn is not None:
+                    await self.entity_description.set_async_fn(self.coordinator, value)
+            except Exception:
+                self._attr_native_value = previous_value
+                if (
+                    self.entity_description.set_fn is not None
+                    and previous_value is not None
+                ):
+                    self.entity_description.set_fn(self.coordinator, previous_value)
+                self.async_write_ha_state()
+                raise
+            self.coordinator.async_save_operation_settings()
+            self.async_write_ha_state()
 
 
 class MammotionSpinoNumberEntity(MammotionBaseSpinoEntity, NumberEntity):  # type: ignore[misc]

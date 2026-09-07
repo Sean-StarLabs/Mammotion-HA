@@ -63,3 +63,10 @@ class MowerControlState:
             )
             or (self.mode == WorkMode.MODE_READY and self.breakpoint_info != 0)
         )
+
+
+def route_setting_available(mode: int | None, *, runtime_supported: bool) -> bool:
+    """Return whether a route setting can affect the current or next task."""
+    if mode in (WorkMode.MODE_READY, WorkMode.MODE_INITIALIZATION):
+        return True
+    return mode == WorkMode.MODE_WORKING and runtime_supported
