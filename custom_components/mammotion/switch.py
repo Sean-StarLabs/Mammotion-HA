@@ -912,10 +912,13 @@ def _async_rebind_area_registry_entries(
         merge_registry_entry_collision(
             registry, survivor_entity_id, duplicate_entity_id
         )
-    update_kwargs: dict[str, str] = {"new_unique_id": new_unique_id}
+    update_kwargs: dict[str, str] = {}
+    if registry.entities[survivor_entity_id].unique_id != new_unique_id:
+        update_kwargs["new_unique_id"] = new_unique_id
     if survivor_entity_id != preserved_entity_id:
         update_kwargs["new_entity_id"] = preserved_entity_id
-    registry.async_update_entity(survivor_entity_id, **update_kwargs)
+    if update_kwargs:
+        registry.async_update_entity(survivor_entity_id, **update_kwargs)
     return {
         old_hash: area_id
         for old_hash, _entry in candidate_entries
