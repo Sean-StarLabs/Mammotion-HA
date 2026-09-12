@@ -299,8 +299,12 @@ async def _async_attempt_login(
             _start_cloud_auth_backoff(hass, entry)
             return False
         raise ConfigEntryError(err)
-    except Exception:
-        return False
+    except Exception as err:
+        LOGGER.exception("Unexpected Mammotion cloud login failure")
+        if ble_fallback:
+            _schedule_cloud_retry(hass, entry, _CLOUD_CONNECTIVITY_RETRY)
+            return False
+        raise ConfigEntryNotReady(err) from err
 
 
 async def _attach_ble_to_mower(

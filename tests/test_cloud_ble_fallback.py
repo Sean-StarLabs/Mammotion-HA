@@ -176,6 +176,42 @@ async def test_connectivity_failure_without_ble_defers_setup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unexpected_login_failure_keeps_ble_and_schedules_retry() -> None:
+    """Unexpected cloud failures remain observable and retryable."""
+    mammotion = SimpleNamespace(
+        login_and_initiate_cloud=AsyncMock(side_effect=RuntimeError("broken response"))
+    )
+    hass = _hass()
+    entry = _entry()
+    schedule_retry = MagicMock()
+
+    with (
+        patch.object(
+            integration.aiohttp_client,
+            "async_get_clientsession",
+            return_value=object(),
+        ),
+        patch.object(integration, "_schedule_cloud_retry", schedule_retry),
+        patch.object(integration.LOGGER, "exception") as log_exception,
+    ):
+        assert not await integration._async_attempt_login(
+            hass,
+            entry,
+            mammotion,
+            "account",
+            "password",
+            ble_fallback=True,
+        )
+
+    log_exception.assert_called_once_with("Unexpected Mammotion cloud login failure")
+    schedule_retry.assert_called_once_with(
+        hass,
+        entry,
+        timedelta(minutes=5),
+    )
+
+
+@pytest.mark.asyncio
 async def test_scheduled_cloud_retry_reloads_entry() -> None:
     """The fallback timer is owned by the entry and reloads that entry once."""
     hass = _hass()
